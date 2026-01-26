@@ -1,0 +1,24 @@
+{
+  "event": "phone.callee_missed",
+  "event_ts": 1705000030000,
+  "payload": {
+    "account_id": "test_account_123",
+    "object": {
+      "call_id": "test-call-002",
+      "caller": {
+        "phone_number": "+15559876543",
+        "name": "Bob Prospect"
+      },
+      "callee": {
+        "extension_type": "user",
+        "extension_number": "1002",
+        "name": "Mike Rep"
+      },
+      "forwarded_by": {
+        "extension_type": "callQueue",
+        "extension_number": "8001",
+        "name": "Sales Queue"
+      }
+    }
+  }
+}

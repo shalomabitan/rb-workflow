@@ -1,0 +1,29 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /zoom/webhook",
+  "rawPath": "/zoom/webhook",
+  "rawQueryString": "",
+  "headers": {
+    "content-type": "application/json"
+  },
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "abc123",
+    "domainName": "abc123.execute-api.us-west-2.amazonaws.com",
+    "domainPrefix": "abc123",
+    "http": {
+      "method": "POST",
+      "path": "/zoom/webhook",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "Zoom-Webhook/1.0"
+    },
+    "requestId": "test-request-id",
+    "routeKey": "POST /zoom/webhook",
+    "stage": "$default",
+    "time": "25/Jan/2026:23:00:00 +0000",
+    "timeEpoch": 1769382000000
+  },
+  "body": "{\"event\":\"endpoint.url_validation\",\"payload\":{\"plainToken\":\"abc123xyz\"}}",
+  "isBase64Encoded": false
+}

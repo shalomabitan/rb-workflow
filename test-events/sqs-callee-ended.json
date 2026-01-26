@@ -1,0 +1,23 @@
+{
+  "Records": [
+    {
+      "messageId": "msg-004",
+      "receiptHandle": "receipt-handle-004",
+      "body": "{\"event_id\":\"evt-ended-001\",\"event_type\":\"phone.callee_ended\",\"event_ts_ms\":1769382600849,\"call_id\":\"7599439975968982118\",\"caller_phone_e164\":\"+13104024766\",\"caller_name\":\"BEVERLY HLS CA\",\"callee_extension_type\":\"user\",\"callee_extension_number\":\"1001\",\"callee_name\":\"Jane Rep\",\"forwarded_by_extension_type\":\"callQueue\",\"forwarded_by_extension_number\":\"8001\",\"forwarded_by_name\":\"111\"}",
+      "attributes": {
+        "ApproximateReceiveCount": "1",
+        "SentTimestamp": "1769382600849",
+        "SenderId": "AIDAEXAMPLE",
+        "ApproximateFirstReceiveTimestamp": "1769382600900",
+        "MessageGroupId": "7599439975968982118",
+        "MessageDeduplicationId": "evt-ended-001",
+        "SequenceNumber": "3"
+      },
+      "messageAttributes": {},
+      "md5OfBody": "abc123",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:us-west-2:123456789012:sls-zoom-events-dev.fifo",
+      "awsRegion": "us-west-2"
+    }
+  ]
+}

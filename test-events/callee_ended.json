@@ -1,0 +1,26 @@
+{
+  "event": "phone.callee_ended",
+  "event_ts": 1705000120000,
+  "payload": {
+    "account_id": "test_account_123",
+    "object": {
+      "call_id": "test-call-001",
+      "caller": {
+        "phone_number": "+15551234567",
+        "name": "John Customer"
+      },
+      "callee": {
+        "extension_type": "user",
+        "extension_number": "1001",
+        "name": "Jane Rep"
+      },
+      "forwarded_by": {
+        "extension_type": "callQueue",
+        "extension_number": "8001",
+        "name": "Sales Queue"
+      },
+      "end_time": "2024-01-11T12:02:00Z",
+      "duration": 105
+    }
+  }
+}

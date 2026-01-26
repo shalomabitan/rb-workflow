@@ -1,0 +1,24 @@
+{
+  "event": "phone.callee_ringing",
+  "event_ts": 1705000025000,
+  "payload": {
+    "account_id": "test_account_123",
+    "object": {
+      "call_id": "test-call-001",
+      "caller": {
+        "phone_number": "+15551234567",
+        "name": "John Customer"
+      },
+      "callee": {
+        "extension_type": "user",
+        "extension_number": "2001",
+        "name": "Overflow Rep"
+      },
+      "forwarded_by": {
+        "extension_type": "callQueue",
+        "extension_number": "8101",
+        "name": "Overflow Queue"
+      }
+    }
+  }
+}

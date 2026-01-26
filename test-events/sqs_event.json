@@ -1,0 +1,22 @@
+{
+  "Records": [
+    {
+      "messageId": "test-message-001",
+      "receiptHandle": "test-receipt-handle",
+      "body": "{\"event_id\":\"test-event-id\",\"event_type\":\"phone.callee_ringing\",\"event_ts_ms\":1705000000000,\"call_id\":\"test-call-001\",\"caller_phone_e164\":\"+15551234567\",\"caller_name\":\"John Customer\",\"callee_extension_type\":\"user\",\"callee_extension_number\":\"1001\",\"callee_name\":\"Jane Rep\",\"forwarded_by_extension_type\":\"callQueue\",\"forwarded_by_extension_number\":\"8001\",\"forwarded_by_name\":\"Sales Queue\"}",
+      "attributes": {
+        "ApproximateReceiveCount": "1",
+        "SentTimestamp": "1705000000000",
+        "SenderId": "EXAMPLE",
+        "ApproximateFirstReceiveTimestamp": "1705000000000",
+        "MessageGroupId": "test-call-001",
+        "MessageDeduplicationId": "test-event-id"
+      },
+      "messageAttributes": {},
+      "md5OfBody": "test-md5",
+      "eventSource": "aws:sqs",
+      "eventSourceARN": "arn:aws:sqs:us-west-2:123456789012:zoom-events-dev.fifo",
+      "awsRegion": "us-west-2"
+    }
+  ]
+}

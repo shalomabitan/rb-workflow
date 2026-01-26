@@ -1,0 +1,31 @@
+{
+  "version": "2.0",
+  "routeKey": "POST /zoom/webhook",
+  "rawPath": "/zoom/webhook",
+  "rawQueryString": "",
+  "headers": {
+    "content-type": "application/json",
+    "x-zm-request-timestamp": "1769382600",
+    "x-zm-signature": "v0=test_signature_placeholder"
+  },
+  "requestContext": {
+    "accountId": "123456789012",
+    "apiId": "abc123",
+    "domainName": "abc123.execute-api.us-west-2.amazonaws.com",
+    "domainPrefix": "abc123",
+    "http": {
+      "method": "POST",
+      "path": "/zoom/webhook",
+      "protocol": "HTTP/1.1",
+      "sourceIp": "127.0.0.1",
+      "userAgent": "Zoom-Webhook/1.0"
+    },
+    "requestId": "test-request-id",
+    "routeKey": "POST /zoom/webhook",
+    "stage": "$default",
+    "time": "25/Jan/2026:23:10:00 +0000",
+    "timeEpoch": 1769382600000
+  },
+  "body": "{\"event\":\"phone.callee_ended\",\"payload\":{\"account_id\":\"qJmSG3cFQoKwiNRGF8Z1Vw\",\"object\":{\"call_id\":\"7599439975968982118\",\"caller\":{\"name\":\"BEVERLY HLS CA\",\"extension_type\":\"pstn\",\"extension_number\":13104024766,\"phone_number\":\"+13104024766\",\"connection_type\":\"pstn_off_net\"},\"callee\":{\"name\":\"Jane Rep\",\"extension_id\":\"W7MBehDfR-GESiINvIg1Nw\",\"extension_type\":\"user\",\"user_id\":\"DlCjsSGIRe2eacp7zDWhCw\",\"timezone\":\"America/Los_Angeles\",\"extension_number\":1001,\"phone_number\":\"+18553028339\",\"connection_type\":\"voip\"},\"forwarded_by\":{\"name\":\"111\",\"extension_type\":\"callQueue\",\"extension_number\":\"8001\"},\"end_time\":\"2026-01-25T23:10:00Z\",\"duration\":70}},\"event_ts\":1769382600849}",
+  "isBase64Encoded": false
+}

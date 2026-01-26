@@ -1,0 +1,107 @@
+# "org" ensures this Service is used with the correct Serverless Framework Access Key.
+org: roofbuddy
+service: sls-zoom-workflow
+
+useDotenv: true
+
+provider:
+  name: aws
+  runtime: nodejs22.x
+  region: us-west-2
+  stage: ${opt:stage, 'dev'}
+  profile: ${opt:profile, 'roofbuddy-stage'}
+  memorySize: 128
+  timeout: 30
+  environment:
+    SUPABASE_URL: ${ssm:/zoom-workflow/supabase-url}
+    SUPABASE_SERVICE_KEY: ${ssm:/zoom-workflow/supabase-service-key}
+    ZOOM_WEBHOOK_SECRET: ${ssm:/zoom-workflow/zoom-webhook-secret}
+    ZAPIER_WEBHOOK_URL: ${ssm:/zoom-workflow/zapier-webhook-url}
+    MONDAY_API_TOKEN: ${ssm:/zoom-workflow/monday-api-token}
+    SLACK_BOT_TOKEN: ${ssm:/zoom-workflow/slack-bot-token}
+    SLACK_CHANNEL_ID: ${ssm:/zoom-workflow/slack-channel-id}
+    IDEMPOTENCY_TTL_SECONDS: "86400"
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+          Resource:
+            - !GetAtt EventsQueue.Arn
+
+custom:
+  eventsQueueName: sls-zoom-events-${self:provider.stage}.fifo
+  dlqName: sls-zoom-events-dlq-${self:provider.stage}.fifo
+  serverless-offline:
+    httpPort: 3000
+    lambdaPort: 3002
+    noPrependStageInUrl: true
+
+plugins:
+  - serverless-offline
+
+build:
+  esbuild:
+    bundle: true
+    minify: true
+    sourcemap:
+      type: linked
+      setNodeOptions: true
+    external:
+      - '@aws-sdk/*'
+
+functions:
+  ingress:
+    handler: src/ingress.handler
+    timeout: 10
+    memorySize: 128
+    environment:
+      EVENTS_QUEUE_URL: https://sqs.${self:provider.region}.amazonaws.com/${aws:accountId}/${self:custom.eventsQueueName}
+    events:
+      - httpApi:
+          path: /zoom/webhook
+          method: POST
+
+  processor:
+    handler: src/processor.handler
+    timeout: 30
+    memorySize: 128
+    events:
+      - sqs:
+          arn: !GetAtt EventsQueue.Arn
+          batchSize: 1
+          functionResponseType: ReportBatchItemFailures
+
+resources:
+  Resources:
+    # SQS: Dead Letter Queue
+    EventsDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:custom.dlqName}
+        FifoQueue: true
+        MessageRetentionPeriod: 1209600  # 14 days
+
+    # SQS: Events Queue (FIFO)
+    EventsQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:custom.eventsQueueName}
+        FifoQueue: true
+        ContentBasedDeduplication: false
+        VisibilityTimeout: 90
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt EventsDLQ.Arn
+          maxReceiveCount: 5
+
+  Outputs:
+    WebhookUrl:
+      Description: Webhook URL to configure in Zoom
+      Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/zoom/webhook"
+    EventsQueueUrl:
+      Description: SQS FIFO queue URL
+      Value: !Ref EventsQueue
+    DLQUrl:
+      Description: Dead Letter Queue URL
+      Value: !Ref EventsDLQ
