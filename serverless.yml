@@ -73,6 +73,15 @@ functions:
           batchSize: 1
           functionResponseType: ReportBatchItemFailures
 
+  proxy:
+    handler: src/proxy.handler
+    timeout: 30
+    memorySize: 128
+    events:
+      - httpApi:
+          path: /proxy/{source}/{webhookId}
+          method: POST
+
 resources:
   Resources:
     # SQS: Dead Letter Queue
@@ -99,6 +108,9 @@ resources:
     WebhookUrl:
       Description: Webhook URL to configure in Zoom
       Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/zoom/webhook"
+    ProxyUrl:
+      Description: Webhook proxy base URL
+      Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/proxy"
     EventsQueueUrl:
       Description: SQS FIFO queue URL
       Value: !Ref EventsQueue
