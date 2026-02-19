@@ -499,8 +499,8 @@ async function processEvent(
       await zapierFetch(zapierPayload);
       console.log(`  ✓ Zapier notified successfully`);
     } catch (error) {
-      console.error(`  ✗ Zapier notification failed:`, error);
-      throw error; // Re-throw to trigger SQS retry
+      // Log but don't throw - Zapier failures shouldn't block the queue
+      console.error(`  ✗ Zapier notification failed (non-blocking):`, error);
     }
   } else {
     console.log(`  - Skipping Zapier notification (route=${updatedCall.route_kind_current})`);

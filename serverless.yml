@@ -12,6 +12,7 @@ provider:
   profile: ${opt:profile, 'roofbuddy-stage'}
   memorySize: 128
   timeout: 30
+  logRetentionInDays: 7
   environment:
     SUPABASE_URL: ${ssm:/zoom-workflow/supabase-url}
     SUPABASE_SERVICE_KEY: ${ssm:/zoom-workflow/supabase-service-key}
@@ -66,11 +67,12 @@ functions:
   processor:
     handler: src/processor.handler
     timeout: 30
-    memorySize: 128
+    memorySize: 256  # More memory = faster cold starts
     events:
       - sqs:
           arn: !GetAtt EventsQueue.Arn
           batchSize: 1
+          maximumBatchingWindow: 0  # Process immediately, don't wait for more messages
           functionResponseType: ReportBatchItemFailures
 
   proxy:
@@ -81,6 +83,15 @@ functions:
       - httpApi:
           path: /proxy/{source}/{webhookId}
           method: POST
+
+  dlqAlert:
+    handler: src/dlq-alert.handler
+    timeout: 10
+    memorySize: 128
+    events:
+      - sqs:
+          arn: !GetAtt EventsDLQ.Arn
+          batchSize: 1
 
 resources:
   Resources:
@@ -102,7 +113,7 @@ resources:
         VisibilityTimeout: 90
         RedrivePolicy:
           deadLetterTargetArn: !GetAtt EventsDLQ.Arn
-          maxReceiveCount: 5
+          maxReceiveCount: 3
 
   Outputs:
     WebhookUrl:

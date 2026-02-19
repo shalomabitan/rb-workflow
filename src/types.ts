@@ -166,6 +166,53 @@ export interface ZapierStateChangePayload {
 }
 
 // ===================
+// Call History Types
+// ===================
+
+export interface CallLogEntry {
+  id: string;
+  call_id: string;
+  call_path_id?: string;
+  direction?: string;
+  event?: string;
+  result?: string;
+  node?: number;
+  caller_name?: string;
+  caller_did_number?: string;
+  caller_number_type?: string;
+  callee_ext_id?: string;
+  callee_ext_number?: string;
+  callee_ext_type?: string;
+  callee_name?: string;
+  callee_email?: string;
+  operator_ext_id?: string;
+  operator_ext_number?: string;
+  operator_ext_type?: string;
+  operator_name?: string;
+  start_time?: string;
+  end_time?: string;
+  // Zoom sends "waiting_time" and "duration", not "wait_time" and "talk_time"
+  waiting_time?: number;  // Zoom's actual field name for wait time
+  duration?: number;      // Zoom's actual field name for talk time
+  // Keep old field names for backward compatibility
+  wait_time?: number;
+  talk_time?: number;
+  hold_time?: number;
+}
+
+export interface CallHistoryPayload {
+  event: 'phone.callee_call_log_completed';
+  event_ts: number;
+  payload: {
+    account_id?: string;
+    object: {
+      call_logs: CallLogEntry[];
+      user_id?: string;
+    };
+  };
+}
+
+// ===================
 // Event Processing
 // ===================
 
