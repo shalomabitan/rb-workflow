@@ -56,7 +56,7 @@ functions:
   ingress:
     handler: src/ingress.handler
     timeout: 10
-    memorySize: 128
+    memorySize: 512
     environment:
       EVENTS_QUEUE_URL: https://sqs.${self:provider.region}.amazonaws.com/${aws:accountId}/${self:custom.eventsQueueName}
     events:
@@ -67,7 +67,7 @@ functions:
   processor:
     handler: src/processor.handler
     timeout: 30
-    memorySize: 256  # More memory = faster cold starts
+    memorySize: 1024  # More memory = more CPU = faster cold starts and API fan-out
     events:
       - sqs:
           arn: !GetAtt EventsQueue.Arn

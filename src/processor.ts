@@ -12,7 +12,7 @@ import {
   loadConfig,
   Config,
 } from './types';
-import { createMondayItem, updateMondayItemStatus, getMondayItemActionCallUrl, MondayItemInput, QUEUE_LABELS, STATUS_LABELS } from './monday';
+import { createMondayItem, updateMondayItemStatus, getMondayItemUrl, MondayItemInput, QUEUE_LABELS, STATUS_LABELS } from './monday';
 import { getSupabaseClient, SupabaseClientType } from './supabase';
 import { postSlackMessage, formatNewCallMessage, formatStatusUpdateMessage } from './slack';
 
@@ -25,7 +25,6 @@ export interface ProcessorDependencies {
   zapierFetch: (payload: ZapierStateChangePayload) => Promise<{ ok: boolean }>;
   mondayCreate: (input: MondayItemInput) => Promise<string>;
   mondayUpdateStatus: (itemId: string, status: keyof typeof STATUS_LABELS, queue?: keyof typeof QUEUE_LABELS) => Promise<void>;
-  mondayGetActionCallUrl: (itemId: string) => Promise<string | undefined>;
   slackPost: (channel: string, text: string, threadTs?: string) => Promise<{ ok: boolean; ts?: string }>;
   now: () => number;
 }
@@ -351,45 +350,30 @@ async function processEvent(
   deps: ProcessorDependencies,
   event: NormalizedEvent
 ): Promise<void> {
-  const { config, supabase, zapierFetch, mondayCreate, mondayUpdateStatus, mondayGetActionCallUrl, slackPost, now } = deps;
+  const { config, supabase, zapierFetch, mondayCreate, mondayUpdateStatus, slackPost, now } = deps;
   const callId = event.call_id;
   const eventType = event.event_type;
 
-  console.log(`[Step 1/8] Loading existing call state for ${callId}...`);
   const existingCall = await getCallRecord(supabase, callId);
-  if (existingCall) {
-    console.log(`  ✓ Found existing call: status=${existingCall.status}, route=${existingCall.route_kind_current}`);
-  } else {
-    console.log(`  ✓ No existing call found - this is a new call`);
-  }
 
-  console.log(`[Step 2/8] Checking state machine guards...`);
   if (!shouldApplyEvent(event, existingCall)) {
-    console.log(`  ✗ Event rejected: out-of-order or duplicate (event_ts=${event.event_ts_ms}, rank=${EVENT_RANKS[eventType] || 0})`);
-    console.log(`    Last processed: ts=${existingCall?.last_processed_event_ts_ms}, rank=${existingCall?.last_processed_rank}`);
+    console.log(`Skipping ${eventType} for ${callId}: out-of-order or duplicate`);
     return;
   }
-  console.log(`  ✓ Event accepted for processing`);
 
-  console.log(`[Step 3/8] Classifying event route...`);
   const classification = await classifyEvent(supabase, event);
-  console.log(`  ✓ Route classification: ${classification.routeKind}${classification.queueConfig ? ` (queue: ${classification.queueConfig.name})` : ''}`);
-
-  console.log(`[Step 4/8] Building call record update...`);
   const previousStatus = existingCall?.status;
   const newStatus = mapEventToStatus(eventType, previousStatus);
   const update = buildCallUpdate(event, classification, existingCall, now());
-  console.log(`  ✓ Status transition: ${previousStatus || 'NEW'} → ${newStatus}`);
 
-  console.log(`[Step 5/8] Checking Monday.com integration...`);
+  console.log(`${eventType} for ${callId}: ${previousStatus || 'NEW'} → ${newStatus} (route=${classification.routeKind})`);
+
   const isNewCall = !existingCall;
   const queueLabel = routeKindToQueueLabel(classification.routeKind);
-  const shouldCreateMondayItem = isNewCall && queueLabel;
 
-  if (shouldCreateMondayItem) {
-    console.log(`  → Creating Monday item for new ${queueLabel} call...`);
+  if (isNewCall && queueLabel) {
     try {
-      const mondayInput: MondayItemInput = {
+      const mondayItemId = await mondayCreate({
         callerPhone: event.caller_phone_e164 || 'Unknown',
         callerName: event.caller_name,
         incomingDateIso: new Date(event.event_ts_ms).toISOString(),
@@ -397,75 +381,47 @@ async function processEvent(
         callQueue: queueLabel,
         source: classification.queueConfig?.name,
         zoomCallId: callId,
-      };
-
-      const mondayItemId = await mondayCreate(mondayInput);
+      });
       update.monday_item_id = mondayItemId;
-      console.log(`  ✓ Monday item created: ${mondayItemId}`);
     } catch (error) {
-      console.error(`  ✗ Monday item creation failed (non-blocking):`, error);
+      console.error('Monday item creation failed (non-blocking):', error);
     }
   } else if (existingCall?.monday_item_id) {
-    // Update Monday item status if status changed
     const mondayStatus = callStatusToMondayLabel(newStatus as CallStatus);
     const statusChanged = previousStatus !== newStatus;
-    // Also update queue if route changed (e.g., MAIN → OVERFLOW)
+    // Bump the queue column if the route changed (e.g. MAIN → OVERFLOW)
     const routeChanged = existingCall.route_kind_current !== classification.routeKind;
     const newQueueLabel = routeChanged ? queueLabel : undefined;
 
     if (statusChanged && mondayStatus) {
-      console.log(`  → Updating Monday item ${existingCall.monday_item_id} status to ${mondayStatus}${newQueueLabel ? ` (queue: ${newQueueLabel})` : ''}...`);
       try {
         await mondayUpdateStatus(existingCall.monday_item_id, mondayStatus, newQueueLabel);
-        console.log(`  ✓ Monday item status updated`);
       } catch (error) {
-        console.error(`  ✗ Monday item update failed (non-blocking):`, error);
+        console.error('Monday item update failed (non-blocking):', error);
       }
-    } else {
-      console.log(`  ✓ Monday item exists: ${existingCall.monday_item_id} (no status change)`);
     }
-  } else {
-    console.log(`  - Skipping Monday (route=${classification.routeKind}, isNewCall=${isNewCall})`);
   }
 
-  console.log(`[Step 6/8] Checking Slack integration...`);
-  const shouldPostSlack = queueLabel !== undefined; // Post for MAIN, OVERFLOW, ANSWERING_SERVICE routes
+  const shouldPostSlack = queueLabel !== undefined;
 
   if (shouldPostSlack && isNewCall) {
-    // New call - create a new thread with Monday Action Call link
-    console.log(`  → Posting new call to Slack...`);
     try {
-      // Fetch the Action Call URL from the newly created Monday item
-      // Wait for Monday automation to populate the Action Call link
-      let actionCallUrl: string | undefined;
-      if (update.monday_item_id) {
-        try {
-          // Wait 2 seconds for Monday automation to run
-          await new Promise((resolve) => setTimeout(resolve, 2000));
-          actionCallUrl = await mondayGetActionCallUrl(update.monday_item_id);
-          console.log(`  ✓ Fetched Action Call URL: ${actionCallUrl || 'none'}`);
-        } catch (err) {
-          console.error(`  ✗ Failed to fetch Action Call URL:`, err);
-        }
-      }
+      const mondayUrl = update.monday_item_id ? getMondayItemUrl(update.monday_item_id) : undefined;
       const slackMessage = formatNewCallMessage(
         event.caller_phone_e164 || 'Unknown',
         event.caller_name,
         classification.queueConfig?.name || classification.routeKind,
         classification.routeKind,
-        actionCallUrl
+        mondayUrl
       );
       const result = await slackPost(config.slackChannelId, slackMessage);
       if (result.ts) {
         update.slack_parent_ts = result.ts;
-        console.log(`  ✓ Slack thread created: ${result.ts}`);
       }
     } catch (error) {
-      console.error(`  ✗ Slack post failed (non-blocking):`, error);
+      console.error('Slack post failed (non-blocking):', error);
     }
   } else if (existingCall?.slack_parent_ts && previousStatus !== newStatus) {
-    // Existing call with thread - reply with status update
-    console.log(`  → Posting status update to Slack thread...`);
     try {
       const slackMessage = formatStatusUpdateMessage(previousStatus, newStatus, {
         answeredBy: event.callee_name,
@@ -474,39 +430,26 @@ async function processEvent(
         queueName: classification.queueConfig?.name,
       });
       await slackPost(config.slackChannelId, slackMessage, existingCall.slack_parent_ts);
-      console.log(`  ✓ Slack thread updated`);
     } catch (error) {
-      console.error(`  ✗ Slack reply failed (non-blocking):`, error);
+      console.error('Slack reply failed (non-blocking):', error);
     }
-  } else {
-    console.log(`  - Skipping Slack (no thread or no status change)`);
   }
 
-  console.log(`[Step 7/8] Saving call record to Supabase...`);
   const updatedCall = await saveCallRecord(supabase, callId, update, existingCall);
-  console.log(`  ✓ Call record saved: status=${updatedCall.status}, monday_item_id=${updatedCall.monday_item_id || 'none'}, slack_ts=${updatedCall.slack_parent_ts || 'none'}`);
 
-  console.log(`[Step 8/8] Notifying Zapier...`);
   const shouldNotifyZapier =
     updatedCall.route_kind_current === 'MAIN' ||
     updatedCall.route_kind_current === 'OVERFLOW' ||
     updatedCall.route_kind_current === 'ANSWERING_SERVICE';
 
   if (shouldNotifyZapier) {
-    const zapierPayload = buildZapierPayload(updatedCall, previousStatus);
-    console.log(`  → Sending to Zapier: ${previousStatus || 'NEW'} → ${updatedCall.status}`);
     try {
-      await zapierFetch(zapierPayload);
-      console.log(`  ✓ Zapier notified successfully`);
+      await zapierFetch(buildZapierPayload(updatedCall, previousStatus));
     } catch (error) {
-      // Log but don't throw - Zapier failures shouldn't block the queue
-      console.error(`  ✗ Zapier notification failed (non-blocking):`, error);
+      // Zapier failures shouldn't block the queue — state is already persisted.
+      console.error('Zapier notification failed (non-blocking):', error);
     }
-  } else {
-    console.log(`  - Skipping Zapier notification (route=${updatedCall.route_kind_current})`);
   }
-
-  console.log(`[Complete] Event processed: ${eventType} for call ${callId}`);
 }
 
 // ===================
@@ -514,16 +457,11 @@ async function processEvent(
 // ===================
 export function createProcessorHandler(deps: ProcessorDependencies) {
   return async function handler(sqsEvent: SQSEvent): Promise<SQSBatchResponse> {
-    console.log('=== PROCESSOR START ===');
-    // Log full SQS event for replay/debugging
-    console.log('SQS_EVENT_PAYLOAD:', JSON.stringify(sqsEvent, null, 2));
     const batchItemFailures: SQSBatchItemFailure[] = [];
 
     for (const record of sqsEvent.Records) {
       try {
         const event = JSON.parse(record.body) as NormalizedEvent;
-        console.log(`Processing: ${event.event_type} for call ${event.call_id}`);
-        console.log('NORMALIZED_EVENT:', JSON.stringify(event, null, 2));
         await processEvent(deps, event);
       } catch (error) {
         console.error('Failed to process record:', record.messageId, error);
@@ -567,7 +505,6 @@ export const handler = createProcessorHandler({
   zapierFetch: (payload) => realZapierFetch(config.zapierWebhookUrl, payload),
   mondayCreate: (input) => createMondayItem(config.mondayApiToken, input),
   mondayUpdateStatus: (itemId, status, queue) => updateMondayItemStatus(config.mondayApiToken, itemId, status, queue),
-  mondayGetActionCallUrl: (itemId) => getMondayItemActionCallUrl(config.mondayApiToken, itemId),
   slackPost: (channel, text, threadTs) =>
     postSlackMessage(config.slackBotToken, { channel, text, thread_ts: threadTs, unfurl_links: false }),
   now: () => Date.now(),

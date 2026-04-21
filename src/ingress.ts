@@ -157,17 +157,6 @@ async function processCallHistory(
       hold_secs: log.hold_time,
     };
 
-    console.log('DEBUG_CALL_LOG_ENTRY:', JSON.stringify({
-      id: log.id,
-      call_id: log.call_id,
-      raw_waiting_time: log.waiting_time,
-      raw_duration: log.duration,
-      raw_wait_time: log.wait_time,
-      raw_talk_time: log.talk_time,
-      mapped_wait_secs: waitSecs,
-      mapped_talk_secs: talkSecs,
-    }));
-
     const { error } = await supabase
       .from('rb_call_logs')
       .upsert(record, { onConflict: 'id' });
@@ -191,27 +180,22 @@ async function pushCallSummaryToMonday(
   mondayApiToken: string,
   callId: string
 ): Promise<{ updated: boolean; error?: string }> {
-  console.log('DEBUG_PUSH_CALL_SUMMARY: Starting for call_id:', callId);
-
-  // Run aggregation query for this call_id
   const { data, error } = await supabase
     .from('rb_call_logs')
     .select('call_id, caller_phone, result, callee_name, queue_name, wait_secs, talk_secs')
     .eq('call_id', callId);
 
   if (error) {
-    console.error('DEBUG_PUSH_CALL_SUMMARY: Supabase query error:', error);
     return { updated: false, error: `Supabase query error: ${error.message}` };
   }
 
   if (!data || data.length === 0) {
-    console.log('DEBUG_PUSH_CALL_SUMMARY: No call logs found for call_id:', callId);
     return { updated: false, error: 'No call logs found for call_id' };
   }
 
-  console.log('DEBUG_PUSH_CALL_SUMMARY: Query results:', JSON.stringify(data));
-
-  // Compute summary from raw logs (equivalent to the GROUP BY query)
+  // Collapse the per-leg call_log rows into the single truth of what happened.
+  // The call_log is Zoom's authoritative record — it sees external forwards
+  // that the per-extension events miss (e.g. overflow answered by a cell).
   const wasAnswered = data.some((log) => log.result === 'answered');
   const answeredBy = data.find((log) => log.result === 'answered')?.callee_name;
   const uniqueAgents = new Set(data.map((log) => log.callee_name).filter(Boolean));
@@ -219,29 +203,38 @@ async function pushCallSummaryToMonday(
   const totalWaitSecs = data.reduce((sum, log) => sum + (log.wait_secs || 0), 0);
   const totalTalkSecs = data.reduce((sum, log) => sum + (log.talk_secs || 0), 0);
 
+  const finalStatus = wasAnswered ? 'ENDED' : 'MISSED';
   const summary: CallSummary = {
     waitSecs: totalWaitSecs,
     talkSecs: totalTalkSecs,
     answeredBy: wasAnswered ? answeredBy : undefined,
     agentsRang: uniqueAgents.size,
     isOverflow: uniqueQueues.size > 1,
+    finalStatus,
   };
 
-  console.log('DEBUG_PUSH_CALL_SUMMARY: Computed summary:', JSON.stringify(summary));
-
-  // Find Monday item by Zoom Call ID
   const mondayItemId = await findMondayItemByZoomCallId(mondayApiToken, callId);
   if (!mondayItemId) {
-    console.log('DEBUG_PUSH_CALL_SUMMARY: Monday item not found for call_id:', callId);
     return { updated: false, error: 'Monday item not found for call_id' };
   }
 
-  console.log('DEBUG_PUSH_CALL_SUMMARY: Found Monday item:', mondayItemId);
-
-  // Update Monday item with summary
   await updateMondayCallSummary(mondayApiToken, mondayItemId, summary);
 
-  console.log('DEBUG_PUSH_CALL_SUMMARY: Successfully updated Monday item:', mondayItemId);
+  // Reconcile rb_calls with the truth from the call_log. This closes out calls
+  // where Zoom never sent callee_ended (external forwards) and corrects calls
+  // we previously marked MISSED that the call_log shows were actually answered.
+  const { error: updateErr } = await supabase
+    .from('rb_calls')
+    .update({
+      status: finalStatus,
+      updated_at_ms: Date.now(),
+    })
+    .eq('call_id', callId);
+
+  if (updateErr) {
+    console.error(`Failed to reconcile rb_calls status for ${callId}:`, updateErr);
+  }
+
   return { updated: true };
 }
 
@@ -293,9 +286,6 @@ export function createIngressHandler(deps: IngressDependencies) {
 
     try {
       const body = JSON.parse(event.body || '{}') as ZoomPayload;
-
-      // DEBUG: Log full raw payload from Zoom
-      console.log('DEBUG_RAW_PAYLOAD:', JSON.stringify(body, null, 2));
 
       // Handle Zoom CRC challenge (endpoint validation)
       if (body.event === 'endpoint.url_validation') {
@@ -361,9 +351,6 @@ export function createIngressHandler(deps: IngressDependencies) {
 
       // Normalize the payload
       const normalizedEvent = normalizePayload(body);
-
-      // DEBUG: Log normalized event
-      console.log('DEBUG_NORMALIZED_EVENT:', JSON.stringify(normalizedEvent, null, 2));
 
       // Light idempotency gate (prevents duplicate enqueues)
       const claimed = await tryClaimIdempotency(

@@ -28,7 +28,6 @@ export const MONDAY_COLUMNS = {
   SOURCE: 'text_mkyxbg9c',
   NUMBER_CALLED: 'phone_mkyxcxzk',
   ZOOM_CALL_ID: 'text_mkyxh5fw',
-  ACTION_CALL: 'link_mkyzpy9v',
   // Call analytics columns
   WAIT_TIME: 'numeric_mm02wdcz',
   TALK_TIME: 'numeric_mm02tc86',
@@ -81,75 +80,6 @@ interface MondayUpdateResponse {
     };
   };
   errors?: Array<{ message: string }>;
-}
-
-interface MondayItemResponse {
-  data?: {
-    items?: Array<{
-      id: string;
-      column_values?: Array<{
-        id: string;
-        value: string | null;
-        text: string | null;
-      }>;
-    }>;
-  };
-  errors?: Array<{ message: string }>;
-}
-
-export async function getMondayItemActionCallUrl(
-  apiToken: string,
-  itemId: string
-): Promise<string | undefined> {
-  const query = `
-    query GetItem($itemId: ID!) {
-      items(ids: [$itemId]) {
-        id
-        column_values(ids: ["${MONDAY_COLUMNS.ACTION_CALL}"]) {
-          id
-          value
-          text
-        }
-      }
-    }
-  `;
-
-  const response = await fetch('https://api.monday.com/v2', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: apiToken,
-    },
-    body: JSON.stringify({
-      query,
-      variables: { itemId },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Monday API error: ${response.status} ${response.statusText}`);
-  }
-
-  const result = (await response.json()) as MondayItemResponse;
-
-  if (result.errors?.length) {
-    throw new Error(`Monday GraphQL error: ${result.errors.map((e) => e.message).join(', ')}`);
-  }
-
-  const item = result.data?.items?.[0];
-  const actionCallColumn = item?.column_values?.find((col) => col.id === MONDAY_COLUMNS.ACTION_CALL);
-
-  if (actionCallColumn?.value) {
-    try {
-      // Link column value is JSON: {"url": "...", "text": "..."}
-      const linkData = JSON.parse(actionCallColumn.value) as { url?: string; text?: string };
-      return linkData.url;
-    } catch {
-      return undefined;
-    }
-  }
-
-  return undefined;
 }
 
 export async function updateMondayItemStatus(
@@ -277,6 +207,10 @@ export interface CallSummary {
   answeredBy?: string;
   agentsRang: number;
   isOverflow: boolean;
+  // Terminal status to stamp on the board now that the call is fully completed.
+  // Needed because Zoom's per-extension events can disagree with the truth
+  // (e.g. overflow answered by an external cell shows as MISSED).
+  finalStatus: keyof typeof STATUS_LABELS;
 }
 
 interface MondaySearchResponse {
@@ -349,6 +283,7 @@ export async function updateMondayCallSummary(
     [MONDAY_COLUMNS.TALK_TIME]: String(summary.talkSecs),
     [MONDAY_COLUMNS.AGENTS_RANG]: String(summary.agentsRang),
     [MONDAY_COLUMNS.IS_OVERFLOW]: { checked: summary.isOverflow },
+    [MONDAY_COLUMNS.CALL_STATUS]: { index: parseInt(STATUS_LABELS[summary.finalStatus], 10) },
   };
 
   if (summary.answeredBy) {
