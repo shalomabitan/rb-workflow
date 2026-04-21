@@ -2,7 +2,7 @@ import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { createHmac, createHash } from 'crypto';
 import parsePhoneNumber, { CountryCode } from 'libphonenumber-js';
-import { ZoomPayload, NormalizedEvent, loadConfig, Config, CallHistoryPayload } from './types';
+import { ZoomPayload, NormalizedEvent, loadConfig, Config, CallHistoryPayload, EVENT_RANKS } from './types';
 import { getSupabaseClient, SupabaseClientType } from './supabase';
 import { updateMondayCallSummary, CallSummary, STATUS_LABELS } from './monday';
 
@@ -178,7 +178,8 @@ async function processCallHistory(
 async function pushCallSummaryToMonday(
   supabase: SupabaseClientType,
   mondayApiToken: string,
-  callId: string
+  callId: string,
+  eventTsMs: number
 ): Promise<{ updated: boolean; error?: string }> {
   // Fetch the per-leg logs and the stored Monday item id in parallel.
   // Using the stored id avoids a Monday search API call per reconcile.
@@ -206,6 +207,8 @@ async function pushCallSummaryToMonday(
   // Collapse the per-leg call_log rows into the single truth of what happened.
   // The call_log is Zoom's authoritative record — it sees external forwards
   // that the per-extension events miss (e.g. overflow answered by a cell).
+  // Zoom's `result` enum also includes voicemail/busy/blocked/etc. — only
+  // 'answered' counts as a real human pickup.
   const wasAnswered = logs.some((log) => log.result === 'answered');
   const answeredBy = logs.find((log) => log.result === 'answered')?.callee_name;
   const uniqueAgents = new Set(logs.map((log) => log.callee_name).filter(Boolean));
@@ -231,11 +234,21 @@ async function pushCallSummaryToMonday(
   // Reconcile Monday + rb_calls in parallel — neither depends on the other,
   // and both are needed to close out calls where Zoom never sent callee_ended
   // (external forwards) or mis-reported overflow answers as MISSED.
+  //
+  // Stamp last_event_ts_ms / last_event_rank so the processor's state-machine
+  // guard (shouldApplyEvent) skips any late callee_ended that loses the race
+  // to this direct write. call_log_completed has rank 50 (> callee_ended's 40),
+  // so a stale event can't win on either the timestamp or rank axis.
   const [, supaUpdate] = await Promise.all([
     updateMondayCallSummary(mondayApiToken, mondayItemId, summary),
     supabase
       .from('rb_calls')
-      .update({ status: finalStatus, updated_at_ms: Date.now() })
+      .update({
+        status: finalStatus,
+        last_event_ts_ms: eventTsMs,
+        last_event_rank: EVENT_RANKS['phone.callee_call_log_completed'],
+        updated_at_ms: Date.now(),
+      })
       .eq('call_id', callId),
   ]);
 
@@ -328,7 +341,7 @@ export function createIngressHandler(deps: IngressDependencies) {
         const results = await Promise.all(
           uniqueCallIds.map(async (callId) => {
             try {
-              const result = await pushCallSummaryToMonday(supabase, config.mondayApiToken, callId);
+              const result = await pushCallSummaryToMonday(supabase, config.mondayApiToken, callId, body.event_ts);
               if (result.updated) {
                 console.log(`Monday updated for call_id: ${callId}`);
               } else {

@@ -221,7 +221,7 @@ export const EVENT_RANKS: Record<string, number> = {
   'phone.callee_answered': 20,
   'phone.callee_missed': 30,
   'phone.callee_ended': 40,
-  'phone.call_log_completed': 50,
+  'phone.callee_call_log_completed': 50,
 };
 
 export function mapEventToStatus(eventType: string, currentStatus?: CallStatus): CallStatus {
@@ -234,7 +234,7 @@ export function mapEventToStatus(eventType: string, currentStatus?: CallStatus):
       // Don't regress from ANSWERED to MISSED
       return currentStatus === 'ANSWERED' ? 'ANSWERED' : 'MISSED';
     case 'phone.callee_ended':
-    case 'phone.call_log_completed':
+    case 'phone.callee_call_log_completed':
       return 'ENDED';
     default:
       return currentStatus || 'NEW';
