@@ -82,21 +82,11 @@ interface MondayUpdateResponse {
   errors?: Array<{ message: string }>;
 }
 
-export async function updateMondayItemStatus(
+async function changeMultipleColumnValues(
   apiToken: string,
   itemId: string,
-  status: keyof typeof STATUS_LABELS,
-  queue?: keyof typeof QUEUE_LABELS
+  columnValues: Record<string, unknown>
 ): Promise<void> {
-  const columnValues: Record<string, unknown> = {
-    [MONDAY_COLUMNS.CALL_STATUS]: { index: parseInt(STATUS_LABELS[status], 10) },
-  };
-
-  // Also update queue if provided (for when call overflows)
-  if (queue) {
-    columnValues[MONDAY_COLUMNS.CALL_QUEUE] = { index: parseInt(QUEUE_LABELS[queue], 10) };
-  }
-
   const query = `
     mutation UpdateItem($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
       change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) {
@@ -130,6 +120,23 @@ export async function updateMondayItemStatus(
   if (result.errors?.length) {
     throw new Error(`Monday GraphQL error: ${result.errors.map((e) => e.message).join(', ')}`);
   }
+}
+
+export async function updateMondayItemStatus(
+  apiToken: string,
+  itemId: string,
+  status: keyof typeof STATUS_LABELS,
+  queue?: keyof typeof QUEUE_LABELS
+): Promise<void> {
+  const columnValues: Record<string, unknown> = {
+    [MONDAY_COLUMNS.CALL_STATUS]: { index: parseInt(STATUS_LABELS[status], 10) },
+  };
+
+  if (queue) {
+    columnValues[MONDAY_COLUMNS.CALL_QUEUE] = { index: parseInt(QUEUE_LABELS[queue], 10) };
+  }
+
+  await changeMultipleColumnValues(apiToken, itemId, columnValues);
 }
 
 export async function createMondayItem(
@@ -213,66 +220,6 @@ export interface CallSummary {
   finalStatus: keyof typeof STATUS_LABELS;
 }
 
-interface MondaySearchResponse {
-  data?: {
-    items_page_by_column_values?: {
-      items: Array<{
-        id: string;
-        name: string;
-      }>;
-    };
-  };
-  errors?: Array<{ message: string }>;
-}
-
-export async function findMondayItemByZoomCallId(
-  apiToken: string,
-  zoomCallId: string
-): Promise<string | undefined> {
-  const query = `
-    query FindByZoomCallId($boardId: ID!, $columnId: String!, $columnValue: String!) {
-      items_page_by_column_values(
-        board_id: $boardId,
-        columns: [{ column_id: $columnId, column_values: [$columnValue] }],
-        limit: 1
-      ) {
-        items {
-          id
-          name
-        }
-      }
-    }
-  `;
-
-  const response = await fetch('https://api.monday.com/v2', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: apiToken,
-    },
-    body: JSON.stringify({
-      query,
-      variables: {
-        boardId: MONDAY_BOARD_ID,
-        columnId: MONDAY_COLUMNS.ZOOM_CALL_ID,
-        columnValue: zoomCallId,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Monday API error: ${response.status} ${response.statusText}`);
-  }
-
-  const result = (await response.json()) as MondaySearchResponse;
-
-  if (result.errors?.length) {
-    throw new Error(`Monday GraphQL error: ${result.errors.map((e) => e.message).join(', ')}`);
-  }
-
-  return result.data?.items_page_by_column_values?.items?.[0]?.id;
-}
-
 export async function updateMondayCallSummary(
   apiToken: string,
   itemId: string,
@@ -290,37 +237,5 @@ export async function updateMondayCallSummary(
     columnValues[MONDAY_COLUMNS.ANSWERED_BY] = summary.answeredBy;
   }
 
-  const query = `
-    mutation UpdateCallSummary($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
-      change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) {
-        id
-      }
-    }
-  `;
-
-  const response = await fetch('https://api.monday.com/v2', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: apiToken,
-    },
-    body: JSON.stringify({
-      query,
-      variables: {
-        boardId: MONDAY_BOARD_ID,
-        itemId,
-        columnValues: JSON.stringify(columnValues),
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Monday API error: ${response.status} ${response.statusText}`);
-  }
-
-  const result = (await response.json()) as MondayUpdateResponse;
-
-  if (result.errors?.length) {
-    throw new Error(`Monday GraphQL error: ${result.errors.map((e) => e.message).join(', ')}`);
-  }
+  await changeMultipleColumnValues(apiToken, itemId, columnValues);
 }

@@ -389,7 +389,6 @@ async function processEvent(
   } else if (existingCall?.monday_item_id) {
     const mondayStatus = callStatusToMondayLabel(newStatus as CallStatus);
     const statusChanged = previousStatus !== newStatus;
-    // Bump the queue column if the route changed (e.g. MAIN → OVERFLOW)
     const routeChanged = existingCall.route_kind_current !== classification.routeKind;
     const newQueueLabel = routeChanged ? queueLabel : undefined;
 

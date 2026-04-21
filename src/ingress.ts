@@ -4,7 +4,7 @@ import { createHmac, createHash } from 'crypto';
 import parsePhoneNumber, { CountryCode } from 'libphonenumber-js';
 import { ZoomPayload, NormalizedEvent, loadConfig, Config, CallHistoryPayload } from './types';
 import { getSupabaseClient, SupabaseClientType } from './supabase';
-import { findMondayItemByZoomCallId, updateMondayCallSummary, CallSummary } from './monday';
+import { updateMondayCallSummary, CallSummary, STATUS_LABELS } from './monday';
 
 // ===================
 // Zoom CRC Challenge Handler
@@ -180,30 +180,40 @@ async function pushCallSummaryToMonday(
   mondayApiToken: string,
   callId: string
 ): Promise<{ updated: boolean; error?: string }> {
-  const { data, error } = await supabase
-    .from('rb_call_logs')
-    .select('call_id, caller_phone, result, callee_name, queue_name, wait_secs, talk_secs')
-    .eq('call_id', callId);
+  // Fetch the per-leg logs and the stored Monday item id in parallel.
+  // Using the stored id avoids a Monday search API call per reconcile.
+  const [logsResult, callResult] = await Promise.all([
+    supabase
+      .from('rb_call_logs')
+      .select('result, callee_name, queue_name, wait_secs, talk_secs')
+      .eq('call_id', callId),
+    supabase
+      .from('rb_calls')
+      .select('monday_item_id')
+      .eq('call_id', callId)
+      .maybeSingle(),
+  ]);
 
-  if (error) {
-    return { updated: false, error: `Supabase query error: ${error.message}` };
+  if (logsResult.error) {
+    return { updated: false, error: `Supabase query error: ${logsResult.error.message}` };
   }
 
-  if (!data || data.length === 0) {
+  const logs = logsResult.data;
+  if (!logs || logs.length === 0) {
     return { updated: false, error: 'No call logs found for call_id' };
   }
 
   // Collapse the per-leg call_log rows into the single truth of what happened.
   // The call_log is Zoom's authoritative record — it sees external forwards
   // that the per-extension events miss (e.g. overflow answered by a cell).
-  const wasAnswered = data.some((log) => log.result === 'answered');
-  const answeredBy = data.find((log) => log.result === 'answered')?.callee_name;
-  const uniqueAgents = new Set(data.map((log) => log.callee_name).filter(Boolean));
-  const uniqueQueues = new Set(data.map((log) => log.queue_name).filter(Boolean));
-  const totalWaitSecs = data.reduce((sum, log) => sum + (log.wait_secs || 0), 0);
-  const totalTalkSecs = data.reduce((sum, log) => sum + (log.talk_secs || 0), 0);
+  const wasAnswered = logs.some((log) => log.result === 'answered');
+  const answeredBy = logs.find((log) => log.result === 'answered')?.callee_name;
+  const uniqueAgents = new Set(logs.map((log) => log.callee_name).filter(Boolean));
+  const uniqueQueues = new Set(logs.map((log) => log.queue_name).filter(Boolean));
+  const totalWaitSecs = logs.reduce((sum, log) => sum + (log.wait_secs || 0), 0);
+  const totalTalkSecs = logs.reduce((sum, log) => sum + (log.talk_secs || 0), 0);
 
-  const finalStatus = wasAnswered ? 'ENDED' : 'MISSED';
+  const finalStatus: keyof typeof STATUS_LABELS = wasAnswered ? 'ENDED' : 'MISSED';
   const summary: CallSummary = {
     waitSecs: totalWaitSecs,
     talkSecs: totalTalkSecs,
@@ -213,26 +223,24 @@ async function pushCallSummaryToMonday(
     finalStatus,
   };
 
-  const mondayItemId = await findMondayItemByZoomCallId(mondayApiToken, callId);
+  const mondayItemId = callResult.data?.monday_item_id;
   if (!mondayItemId) {
-    return { updated: false, error: 'Monday item not found for call_id' };
+    return { updated: false, error: 'No Monday item stored for call_id' };
   }
 
-  await updateMondayCallSummary(mondayApiToken, mondayItemId, summary);
+  // Reconcile Monday + rb_calls in parallel — neither depends on the other,
+  // and both are needed to close out calls where Zoom never sent callee_ended
+  // (external forwards) or mis-reported overflow answers as MISSED.
+  const [, supaUpdate] = await Promise.all([
+    updateMondayCallSummary(mondayApiToken, mondayItemId, summary),
+    supabase
+      .from('rb_calls')
+      .update({ status: finalStatus, updated_at_ms: Date.now() })
+      .eq('call_id', callId),
+  ]);
 
-  // Reconcile rb_calls with the truth from the call_log. This closes out calls
-  // where Zoom never sent callee_ended (external forwards) and corrects calls
-  // we previously marked MISSED that the call_log shows were actually answered.
-  const { error: updateErr } = await supabase
-    .from('rb_calls')
-    .update({
-      status: finalStatus,
-      updated_at_ms: Date.now(),
-    })
-    .eq('call_id', callId);
-
-  if (updateErr) {
-    console.error(`Failed to reconcile rb_calls status for ${callId}:`, updateErr);
+  if (supaUpdate.error) {
+    console.error(`Failed to reconcile rb_calls status for ${callId}:`, supaUpdate.error);
   }
 
   return { updated: true };
@@ -282,8 +290,6 @@ export function createIngressHandler(deps: IngressDependencies) {
   return async function handler(
     event: APIGatewayProxyEventV2
   ): Promise<APIGatewayProxyResultV2> {
-    console.log('=== INGRESS START ===');
-
     try {
       const body = JSON.parse(event.body || '{}') as ZoomPayload;
 
@@ -313,27 +319,31 @@ export function createIngressHandler(deps: IngressDependencies) {
         const { processed, errors } = await processCallHistory(supabase, historyPayload);
         console.log(`Call history processed: ${processed} logs, ${errors} errors`);
 
-        // Push call summaries to Monday for unique call_ids
+        // Push call summaries to Monday for unique call_ids in parallel.
+        // Each call is independent; Monday's rate limit comfortably allows the
+        // handful of concurrent calls a typical call_log event produces.
         const callLogs = historyPayload.payload.object.call_logs || [];
         const uniqueCallIds = [...new Set(callLogs.map((log) => log.call_id).filter(Boolean))];
-        let mondayUpdated = 0;
-        let mondayErrors = 0;
 
-        for (const callId of uniqueCallIds) {
-          try {
-            const result = await pushCallSummaryToMonday(supabase, config.mondayApiToken, callId);
-            if (result.updated) {
-              mondayUpdated++;
-              console.log(`Monday updated for call_id: ${callId}`);
-            } else {
-              console.log(`Monday not updated for call_id ${callId}: ${result.error}`);
+        const results = await Promise.all(
+          uniqueCallIds.map(async (callId) => {
+            try {
+              const result = await pushCallSummaryToMonday(supabase, config.mondayApiToken, callId);
+              if (result.updated) {
+                console.log(`Monday updated for call_id: ${callId}`);
+              } else {
+                console.log(`Monday not updated for call_id ${callId}: ${result.error}`);
+              }
+              return { ok: result.updated, threw: false };
+            } catch (err) {
+              console.error(`Failed to update Monday for call_id ${callId}:`, err);
+              return { ok: false, threw: true };
             }
-          } catch (err) {
-            mondayErrors++;
-            console.error(`Failed to update Monday for call_id ${callId}:`, err);
-          }
-        }
+          })
+        );
 
+        const mondayUpdated = results.filter((r) => r.ok).length;
+        const mondayErrors = results.filter((r) => r.threw).length;
         console.log(`Monday updates: ${mondayUpdated} updated, ${mondayErrors} errors`);
         return {
           statusCode: 200,
