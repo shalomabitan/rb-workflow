@@ -5,6 +5,7 @@ import parsePhoneNumber, { CountryCode } from 'libphonenumber-js';
 import { ZoomPayload, NormalizedEvent, loadConfig, Config, CallHistoryPayload, EVENT_RANKS } from './types';
 import { getSupabaseClient, SupabaseClientType } from './supabase';
 import { updateMondayCallSummary, CallSummary, STATUS_LABELS } from './monday';
+import { lightBulbRed, turnBulbOff } from './lifx';
 
 // ===================
 // Zoom CRC Challenge Handler
@@ -177,12 +178,16 @@ async function processCallHistory(
 // ===================
 async function pushCallSummaryToMonday(
   supabase: SupabaseClientType,
-  mondayApiToken: string,
+  config: Config,
   callId: string,
   eventTsMs: number
 ): Promise<{ updated: boolean; error?: string }> {
-  // Fetch the per-leg logs and the stored Monday item id in parallel.
-  // Using the stored id avoids a Monday search API call per reconcile.
+  // Fetch the per-leg logs and the stored Monday item id + current status in
+  // parallel. Using the stored id avoids a Monday search API call per
+  // reconcile. Current status tells us whether the bulb may still be on — the
+  // processor's state transitions normally turn it off on callee_ended, but
+  // external-forward calls never get that event and would otherwise strand
+  // the bulb in red.
   const [logsResult, callResult] = await Promise.all([
     supabase
       .from('rb_call_logs')
@@ -190,7 +195,7 @@ async function pushCallSummaryToMonday(
       .eq('call_id', callId),
     supabase
       .from('rb_calls')
-      .select('monday_item_id')
+      .select('monday_item_id, status')
       .eq('call_id', callId)
       .maybeSingle(),
   ]);
@@ -239,8 +244,20 @@ async function pushCallSummaryToMonday(
   // guard (shouldApplyEvent) skips any late callee_ended that loses the race
   // to this direct write. call_log_completed has rank 50 (> callee_ended's 40),
   // so a stale event can't win on either the timestamp or rank axis.
+  //
+  // Also turn off the LIFX bulb if the call is still marked RINGING here — the
+  // external-forward case is the one where the processor never saw a transition
+  // out of RINGING, so this is the last chance to clear the indicator.
+  const wasStillRinging = callResult.data?.status === 'RINGING';
+  const bulbOffPromise: Promise<void> =
+    wasStillRinging && config.lifxToken
+      ? turnBulbOff(config.lifxToken, config.lifxBulbLabel).catch((err) => {
+          console.error('LIFX off failed (non-blocking):', err);
+        })
+      : Promise.resolve();
+
   const [, supaUpdate] = await Promise.all([
-    updateMondayCallSummary(mondayApiToken, mondayItemId, summary),
+    updateMondayCallSummary(config.mondayApiToken, mondayItemId, summary),
     supabase
       .from('rb_calls')
       .update({
@@ -250,6 +267,7 @@ async function pushCallSummaryToMonday(
         updated_at_ms: Date.now(),
       })
       .eq('call_id', callId),
+    bulbOffPromise,
   ]);
 
   if (supaUpdate.error) {
@@ -325,6 +343,24 @@ export function createIngressHandler(deps: IngressDependencies) {
         return { statusCode: 401, body: 'Unauthorized' };
       }
 
+      // Kick off the LIFX ringing indicator ASAP on the first-ring of a
+      // MAIN-queue call. Runs in parallel with the rest of the pipeline so
+      // the API call doesn't add latency — we await it with Promise.all right
+      // before returning. PUT /state is idempotent; repeat rings on the same
+      // call are harmless re-sends.
+      let lifxPromise: Promise<void> = Promise.resolve();
+      const forwardedByExt = body.payload?.object?.forwarded_by?.extension_number;
+      if (
+        body.event === 'phone.callee_ringing' &&
+        config.lifxToken &&
+        forwardedByExt != null &&
+        config.mainQueueExts.includes(String(forwardedByExt))
+      ) {
+        lifxPromise = lightBulbRed(config.lifxToken, config.lifxBulbLabel).catch((err) => {
+          console.error('LIFX on failed (non-blocking):', err);
+        });
+      }
+
       // Handle call history events (different structure - has call_logs array)
       if (body.event === 'phone.callee_call_log_completed') {
         console.log('Processing call history event');
@@ -341,7 +377,7 @@ export function createIngressHandler(deps: IngressDependencies) {
         const results = await Promise.all(
           uniqueCallIds.map(async (callId) => {
             try {
-              const result = await pushCallSummaryToMonday(supabase, config.mondayApiToken, callId, body.event_ts);
+              const result = await pushCallSummaryToMonday(supabase, config, callId, body.event_ts);
               if (result.updated) {
                 console.log(`Monday updated for call_id: ${callId}`);
               } else {
@@ -369,6 +405,7 @@ export function createIngressHandler(deps: IngressDependencies) {
       const callId = body.payload?.object?.call_id;
       if (!callId) {
         console.log('No call_id in payload, acknowledging but not processing');
+        await lifxPromise;
         return { statusCode: 200, body: JSON.stringify({ ok: true, skipped: 'no_call_id' }) };
       }
 
@@ -384,18 +421,23 @@ export function createIngressHandler(deps: IngressDependencies) {
 
       if (!claimed) {
         console.log('Duplicate event, already processed:', normalizedEvent.event_id);
+        await lifxPromise;
         return { statusCode: 200, body: JSON.stringify({ ok: true, duplicate: true }) };
       }
 
-      // Enqueue to SQS FIFO for real-time processing by processor Lambda
-      await sqsClient.send(
-        new SendMessageCommand({
-          QueueUrl: config.eventsQueueUrl,
-          MessageBody: JSON.stringify(normalizedEvent),
-          MessageGroupId: normalizedEvent.call_id, // FIFO ordering per call
-          MessageDeduplicationId: normalizedEvent.event_id, // Secondary dedupe
-        })
-      );
+      // Enqueue to SQS FIFO and drain the in-flight LIFX call in parallel.
+      // Both already running — Promise.all just waits for the slower one.
+      await Promise.all([
+        sqsClient.send(
+          new SendMessageCommand({
+            QueueUrl: config.eventsQueueUrl,
+            MessageBody: JSON.stringify(normalizedEvent),
+            MessageGroupId: normalizedEvent.call_id, // FIFO ordering per call
+            MessageDeduplicationId: normalizedEvent.event_id, // Secondary dedupe
+          })
+        ),
+        lifxPromise,
+      ]);
 
       console.log('Event enqueued successfully:', normalizedEvent.event_id);
 

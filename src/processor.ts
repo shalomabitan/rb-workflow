@@ -15,6 +15,7 @@ import {
 import { createMondayItem, updateMondayItemStatus, getMondayItemUrl, MondayItemInput, QUEUE_LABELS, STATUS_LABELS } from './monday';
 import { getSupabaseClient, SupabaseClientType } from './supabase';
 import { postSlackMessage, formatNewCallMessage, formatStatusUpdateMessage } from './slack';
+import { turnBulbOff } from './lifx';
 
 // ===================
 // Dependencies for Testing
@@ -26,6 +27,7 @@ export interface ProcessorDependencies {
   mondayCreate: (input: MondayItemInput) => Promise<string>;
   mondayUpdateStatus: (itemId: string, status: keyof typeof STATUS_LABELS, queue?: keyof typeof QUEUE_LABELS) => Promise<void>;
   slackPost: (channel: string, text: string, threadTs?: string) => Promise<{ ok: boolean; ts?: string }>;
+  lifxOff: () => Promise<void>;
   now: () => number;
 }
 
@@ -368,6 +370,20 @@ async function processEvent(
 
   console.log(`${eventType} for ${callId}: ${previousStatus || 'NEW'} → ${newStatus} (route=${classification.routeKind})`);
 
+  // Kick off LIFX turn-off the moment we know the call is leaving RINGING.
+  // Fire in parallel with the Monday/Slack/save fan-out; drained at the end
+  // of processEvent so Lambda doesn't freeze the in-flight fetch.
+  // Note: if two MAIN-queue calls overlap, one ending will turn the bulb off
+  // while the other is still ringing. Accepted tradeoff — the next ringing
+  // event will re-light idempotently. Also ignores route_kind here so an
+  // overflow'd call (route became OVERFLOW by the end) still turns off.
+  const leavingRinging = previousStatus === 'RINGING' && newStatus !== 'RINGING';
+  const lifxOffPromise: Promise<void> = leavingRinging
+    ? deps.lifxOff().catch((err) => {
+        console.error('LIFX off failed (non-blocking):', err);
+      })
+    : Promise.resolve();
+
   const isNewCall = !existingCall;
   const queueLabel = routeKindToQueueLabel(classification.routeKind);
 
@@ -449,6 +465,8 @@ async function processEvent(
       console.error('Zapier notification failed (non-blocking):', error);
     }
   }
+
+  await lifxOffPromise;
 }
 
 // ===================
@@ -506,5 +524,7 @@ export const handler = createProcessorHandler({
   mondayUpdateStatus: (itemId, status, queue) => updateMondayItemStatus(config.mondayApiToken, itemId, status, queue),
   slackPost: (channel, text, threadTs) =>
     postSlackMessage(config.slackBotToken, { channel, text, thread_ts: threadTs, unfurl_links: false }),
+  lifxOff: () =>
+    config.lifxToken ? turnBulbOff(config.lifxToken, config.lifxBulbLabel) : Promise.resolve(),
   now: () => Date.now(),
 });
