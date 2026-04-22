@@ -21,9 +21,9 @@ provider:
     MONDAY_API_TOKEN: ${ssm:/zoom-workflow/monday-api-token}
     SLACK_BOT_TOKEN: ${ssm:/zoom-workflow/slack-bot-token}
     SLACK_CHANNEL_ID: ${ssm:/zoom-workflow/slack-channel-id}
-    LIFX_TOKEN: ${ssm:/zoom-workflow/lifx-token}
-    LIFX_BULB_LABEL: ${ssm:/zoom-workflow/lifx-bulb-label}
-    MAIN_QUEUE_EXTS: ${ssm:/zoom-workflow/main-queue-exts}
+    LIFX_TOKEN: ${ssm:/zoom-workflow/lifx-token, ''}
+    LIFX_BULB_LABEL: ${ssm:/zoom-workflow/lifx-bulb-label, 'Call center bulb 1'}
+    MAIN_QUEUE_EXTS: ${ssm:/zoom-workflow/main-queue-exts, ''}
     IDEMPOTENCY_TTL_SECONDS: "86400"
   iam:
     role:
