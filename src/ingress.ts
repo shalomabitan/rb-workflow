@@ -344,22 +344,29 @@ export function createIngressHandler(deps: IngressDependencies) {
       }
 
       // Kick off the LIFX ringing indicator ASAP on the first-ring of a
-      // MAIN-queue call. Runs in parallel with the rest of the pipeline so
-      // the API call doesn't add latency — we await it with Promise.all right
-      // before returning. PUT /state is idempotent; repeat rings on the same
-      // call are harmless re-sends.
-      let lifxPromise: Promise<void> = Promise.resolve();
+      // MAIN-queue call. Route classification comes from rb_call_queues —
+      // single source of truth shared with the processor. The whole chain
+      // (DB lookup + PUT) runs in parallel with idempotency + SQS and is
+      // awaited at the end so Lambda doesn't freeze the fetch. PUT /state is
+      // idempotent; repeat rings on the same call are harmless re-sends.
       const forwardedByExt = body.payload?.object?.forwarded_by?.extension_number;
-      if (
-        body.event === 'phone.callee_ringing' &&
-        config.lifxToken &&
-        forwardedByExt != null &&
-        config.mainQueueExts.includes(String(forwardedByExt))
-      ) {
-        lifxPromise = lightBulbRed(config.lifxToken, config.lifxBulbLabel).catch((err) => {
-          console.error('LIFX on failed (non-blocking):', err);
-        });
-      }
+      const shouldCheckBulb =
+        body.event === 'phone.callee_ringing' && !!config.lifxToken && forwardedByExt != null;
+
+      const lifxPromise: Promise<void> = shouldCheckBulb
+        ? (async () => {
+            const { data } = await supabase
+              .from('rb_call_queues')
+              .select('route_kind, enabled')
+              .eq('queue_ext', String(forwardedByExt))
+              .maybeSingle();
+            if (data?.enabled && data.route_kind === 'MAIN') {
+              await lightBulbRed(config.lifxToken, config.lifxBulbLabel);
+            }
+          })().catch((err) => {
+            console.error('LIFX on failed (non-blocking):', err);
+          })
+        : Promise.resolve();
 
       // Handle call history events (different structure - has call_logs array)
       if (body.event === 'phone.callee_call_log_completed') {

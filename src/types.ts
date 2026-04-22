@@ -258,15 +258,9 @@ export interface Config {
   // LIFX ringing indicator
   lifxToken: string;
   lifxBulbLabel: string;
-  // Comma-separated queue extensions that should light the bulb.
-  // Kept as a fast in-memory list so the ingress fast-path doesn't need a
-  // Supabase lookup before firing the LIFX call. rb_call_queues remains the
-  // source of truth for the processor's classification logic.
-  mainQueueExts: string[];
 }
 
 export function loadConfig(): Config {
-  const mainQueueExtsRaw = process.env.MAIN_QUEUE_EXTS || '';
   return {
     supabaseUrl: process.env.SUPABASE_URL!,
     supabaseServiceKey: process.env.SUPABASE_SERVICE_KEY!,
@@ -279,6 +273,5 @@ export function loadConfig(): Config {
     idempotencyTtlSeconds: parseInt(process.env.IDEMPOTENCY_TTL_SECONDS || '86400', 10),
     lifxToken: process.env.LIFX_TOKEN || '',
     lifxBulbLabel: process.env.LIFX_BULB_LABEL || 'Call center bulb 1',
-    mainQueueExts: mainQueueExtsRaw.split(',').map((s) => s.trim()).filter(Boolean),
   };
 }
