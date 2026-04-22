@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "serverless offline start",
     "deploy": "serverless deploy",
-    "deploy:prod": "serverless deploy --stage prod",
+    "deploy:prod": "AWS_PROFILE=roofbuddy-prod serverless deploy --stage prod",
     "remove": "serverless remove",
     "logs:ingress": "serverless logs -f ingress -t",
     "logs:processor": "serverless logs -f processor -t",
