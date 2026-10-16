@@ -368,8 +368,14 @@ export function createIngressHandler(deps: IngressDependencies) {
           })
         : Promise.resolve();
 
-      // Handle call history events (different structure - has call_logs array)
-      if (body.event === 'phone.callee_call_log_completed') {
+      // Handle call history events (different structure - has call_logs array).
+      // Zoom renamed this event from `*_call_log_completed` to
+      // `*_call_history_completed`; accept both so the analytics/reconcile path
+      // keeps firing regardless of which name the subscription delivers.
+      if (
+        body.event === 'phone.callee_call_log_completed' ||
+        body.event === 'phone.callee_call_history_completed'
+      ) {
         console.log('Processing call history event');
         const historyPayload = body as unknown as CallHistoryPayload;
         const { processed, errors } = await processCallHistory(supabase, historyPayload);

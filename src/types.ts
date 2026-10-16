@@ -159,7 +159,7 @@ export interface CallLogEntry {
 }
 
 export interface CallHistoryPayload {
-  event: 'phone.callee_call_log_completed';
+  event: 'phone.callee_call_log_completed' | 'phone.callee_call_history_completed';
   event_ts: number;
   payload: {
     account_id?: string;
@@ -179,7 +179,10 @@ export const EVENT_RANKS: Record<string, number> = {
   'phone.callee_answered': 20,
   'phone.callee_missed': 30,
   'phone.callee_ended': 40,
+  // Zoom replaced `*_call_log_completed` with `*_call_history_completed`; keep
+  // both so we match whichever the account's webhook subscription sends.
   'phone.callee_call_log_completed': 50,
+  'phone.callee_call_history_completed': 50,
 };
 
 export function mapEventToStatus(eventType: string, currentStatus?: CallStatus): CallStatus {
@@ -193,6 +196,7 @@ export function mapEventToStatus(eventType: string, currentStatus?: CallStatus):
       return currentStatus === 'ANSWERED' ? 'ANSWERED' : 'MISSED';
     case 'phone.callee_ended':
     case 'phone.callee_call_log_completed':
+    case 'phone.callee_call_history_completed':
       return 'ENDED';
     default:
       return currentStatus || 'NEW';
