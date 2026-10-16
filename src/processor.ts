@@ -4,7 +4,6 @@ import {
   CallRecord,
   CallQueueConfig,
   SpecialNumberConfig,
-  ZapierStateChangePayload,
   CallStatus,
   RouteKind,
   EVENT_RANKS,
@@ -23,7 +22,6 @@ import { turnBulbOff } from './lifx';
 export interface ProcessorDependencies {
   config: Config;
   supabase: SupabaseClientType;
-  zapierFetch: (payload: ZapierStateChangePayload) => Promise<{ ok: boolean }>;
   mondayCreate: (input: MondayItemInput) => Promise<string>;
   mondayUpdateStatus: (itemId: string, status: keyof typeof STATUS_LABELS, queue?: keyof typeof QUEUE_LABELS) => Promise<void>;
   slackPost: (channel: string, text: string, threadTs?: string) => Promise<{ ok: boolean; ts?: string }>;
@@ -277,41 +275,6 @@ async function saveCallRecord(
 }
 
 // ===================
-// Build Zapier Payload
-// ===================
-function buildZapierPayload(
-  callRecord: CallRecord,
-  previousStatus?: CallStatus
-): ZapierStateChangePayload {
-  return {
-    event_type: 'state_change',
-    triggered_at: new Date().toISOString(),
-    call_id: callRecord.call_id,
-    monday_item_id: callRecord.monday_item_id,
-    status: callRecord.status,
-    previous_status: previousStatus,
-    caller_phone: callRecord.caller_phone_e164 || 'Unknown',
-    caller_name: callRecord.caller_name,
-    route_kind: callRecord.route_kind_current,
-    source_queue: callRecord.main_queue_name || 'Unknown',
-    source_queue_ext: callRecord.main_queue_ext || '',
-    overflowed: callRecord.overflowed,
-    overflow_queue: callRecord.overflow_queue_name,
-    overflow_queue_ext: callRecord.overflow_queue_ext,
-    answered_by: callRecord.answered_by_name,
-    answered_by_ext: callRecord.answered_by_ext,
-    ended_at: callRecord.ended_at_ms
-      ? new Date(callRecord.ended_at_ms).toISOString()
-      : undefined,
-    duration_total_sec: callRecord.dur_total_sec,
-    duration_talk_sec: callRecord.dur_talk_sec,
-    duration_ring_sec: callRecord.dur_ring_sec,
-    disposition: callRecord.disposition,
-    recording_url: callRecord.recording_url,
-  };
-}
-
-// ===================
 // Map RouteKind to Monday Queue Label
 // ===================
 function routeKindToQueueLabel(routeKind: RouteKind): keyof typeof QUEUE_LABELS | undefined {
@@ -352,7 +315,7 @@ async function processEvent(
   deps: ProcessorDependencies,
   event: NormalizedEvent
 ): Promise<void> {
-  const { config, supabase, zapierFetch, mondayCreate, mondayUpdateStatus, slackPost, now } = deps;
+  const { config, supabase, mondayCreate, mondayUpdateStatus, slackPost, now } = deps;
   const callId = event.call_id;
   const eventType = event.event_type;
 
@@ -450,21 +413,7 @@ async function processEvent(
     }
   }
 
-  const updatedCall = await saveCallRecord(supabase, callId, update, existingCall);
-
-  const shouldNotifyZapier =
-    updatedCall.route_kind_current === 'MAIN' ||
-    updatedCall.route_kind_current === 'OVERFLOW' ||
-    updatedCall.route_kind_current === 'ANSWERING_SERVICE';
-
-  if (shouldNotifyZapier) {
-    try {
-      await zapierFetch(buildZapierPayload(updatedCall, previousStatus));
-    } catch (error) {
-      // Zapier failures shouldn't block the queue — state is already persisted.
-      console.error('Zapier notification failed (non-blocking):', error);
-    }
-  }
+  await saveCallRecord(supabase, callId, update, existingCall);
 
   await lifxOffPromise;
 }
@@ -491,26 +440,6 @@ export function createProcessorHandler(deps: ProcessorDependencies) {
 }
 
 // ===================
-// Real Zapier Fetch
-// ===================
-async function realZapierFetch(
-  webhookUrl: string,
-  payload: ZapierStateChangePayload
-): Promise<{ ok: boolean }> {
-  const response = await fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Zapier webhook failed: ${response.status} ${response.statusText}`);
-  }
-
-  return { ok: true };
-}
-
-// ===================
 // Default Handler (Lambda Entry Point)
 // ===================
 const config = loadConfig();
@@ -519,7 +448,6 @@ const supabase = getSupabaseClient();
 export const handler = createProcessorHandler({
   config,
   supabase,
-  zapierFetch: (payload) => realZapierFetch(config.zapierWebhookUrl, payload),
   mondayCreate: (input) => createMondayItem(config.mondayApiToken, input),
   mondayUpdateStatus: (itemId, status, queue) => updateMondayItemStatus(config.mondayApiToken, itemId, status, queue),
   slackPost: (channel, text, threadTs) =>

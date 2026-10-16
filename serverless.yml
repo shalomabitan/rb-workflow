@@ -17,7 +17,6 @@ provider:
     SUPABASE_URL: ${ssm:/zoom-workflow/supabase-url}
     SUPABASE_SERVICE_KEY: ${ssm:/zoom-workflow/supabase-service-key}
     ZOOM_WEBHOOK_SECRET: ${ssm:/zoom-workflow/zoom-webhook-secret}
-    ZAPIER_WEBHOOK_URL: ${ssm:/zoom-workflow/zapier-webhook-url}
     MONDAY_API_TOKEN: ${ssm:/zoom-workflow/monday-api-token}
     SLACK_BOT_TOKEN: ${ssm:/zoom-workflow/slack-bot-token}
     SLACK_CHANNEL_ID: ${ssm:/zoom-workflow/slack-channel-id}

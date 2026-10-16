@@ -124,48 +124,6 @@ export interface NormalizedEvent {
 }
 
 // ===================
-// Zapier Webhook Types
-// ===================
-
-export interface ZapierStateChangePayload {
-  // Event metadata
-  event_type: 'state_change';
-  triggered_at: string; // ISO timestamp
-
-  // Call identification
-  call_id: string;
-  monday_item_id?: string;
-
-  // Current state (what Zapier should display)
-  status: CallStatus;
-  previous_status?: CallStatus;
-
-  // Caller info
-  caller_phone: string;
-  caller_name?: string;
-
-  // Routing info
-  route_kind: RouteKind;
-  source_queue: string;
-  source_queue_ext: string;
-  overflowed: boolean;
-  overflow_queue?: string;
-  overflow_queue_ext?: string;
-
-  // Outcome info (populated when available)
-  answered_by?: string;
-  answered_by_ext?: string;
-  ended_at?: string;
-
-  // Analytics (populated on call_log_completed)
-  duration_total_sec?: number;
-  duration_talk_sec?: number;
-  duration_ring_sec?: number;
-  disposition?: string;
-  recording_url?: string;
-}
-
-// ===================
 // Call History Types
 // ===================
 
@@ -250,7 +208,6 @@ export interface Config {
   supabaseServiceKey: string;
   eventsQueueUrl?: string; // Only for ingress
   zoomWebhookSecret: string;
-  zapierWebhookUrl: string;
   mondayApiToken: string;
   slackBotToken: string;
   slackChannelId: string;
@@ -266,7 +223,6 @@ export function loadConfig(): Config {
     supabaseServiceKey: process.env.SUPABASE_SERVICE_KEY!,
     eventsQueueUrl: process.env.EVENTS_QUEUE_URL,
     zoomWebhookSecret: process.env.ZOOM_WEBHOOK_SECRET!,
-    zapierWebhookUrl: process.env.ZAPIER_WEBHOOK_URL!,
     mondayApiToken: process.env.MONDAY_API_TOKEN!,
     slackBotToken: process.env.SLACK_BOT_TOKEN!,
     slackChannelId: process.env.SLACK_CHANNEL_ID!,
