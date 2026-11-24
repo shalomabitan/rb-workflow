@@ -52,17 +52,18 @@ Serverless v4 refuses every command (deploy, package, print, offline) without `s
 
 ## Measuring the Slack delay
 
-The processor logs each batch as `SQS_EVENT_PAYLOAD`, with `SentTimestamp` and `ApproximateReceiveCount`. Logs Insights on `/aws/lambda/sls-zoom-workflow-prod-processor`:
+For each event it processes, the processor logs one JSON line: `{"metric":"processed","event_type",...,"queue_wait_ms","process_ms","receive_count"}`. A failed event does not get this line; it logs `Failed to process record`. Run this in Logs Insights on `/aws/lambda/sls-zoom-workflow-prod-processor`:
 
 ```
-filter @message like /SQS_EVENT_PAYLOAD/
-| parse @message /"ApproximateReceiveCount": "(?<rc>\d+)"/
-| parse @message /"SentTimestamp": "(?<sent>\d+)"/
-| fields (toMillis(@timestamp) - sent)/1000 as waitS
-| stats count() as n, pct(waitS,50) as p50, pct(waitS,90) as p90, max(waitS) as maxS by rc
+filter @message like /"metric":"processed"/
+| parse @message /"queue_wait_ms":(?<wait>-?\d+)/
+| parse @message /"process_ms":(?<proc>\d+)/
+| parse @message /"receive_count":(?<rcount>\d+)/
+| stats count() as n, pct(wait,50) as wait_p50, pct(wait,90) as wait_p90, max(wait) as wait_max,
+        pct(proc,50) as proc_p50, pct(proc,95) as proc_p95 by rcount
 ```
 
-A receive count above 1 means a retry. Each retry adds 90 seconds or more.
+A receive count above 1 means a retry. Each retry adds 90 seconds or more. Logs from before 2026-11-24 use a different format: a `SQS_EVENT_PAYLOAD` line that holds `SentTimestamp`.
 
 ## History
 

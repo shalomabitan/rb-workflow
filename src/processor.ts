@@ -426,9 +426,19 @@ export function createProcessorHandler(deps: ProcessorDependencies) {
     const batchItemFailures: SQSBatchItemFailure[] = [];
 
     for (const record of sqsEvent.Records) {
+      const startedAt = Date.now();
       try {
         const event = JSON.parse(record.body) as NormalizedEvent;
         await processEvent(deps, event);
+        // One line per event so Logs Insights can measure Slack latency (see AGENTS.md).
+        console.log(JSON.stringify({
+          metric: 'processed',
+          event_type: event.event_type,
+          call_id: event.call_id,
+          queue_wait_ms: startedAt - Number(record.attributes.SentTimestamp),
+          process_ms: Date.now() - startedAt,
+          receive_count: Number(record.attributes.ApproximateReceiveCount),
+        }));
       } catch (error) {
         console.error('Failed to process record:', record.messageId, error);
         batchItemFailures.push({ itemIdentifier: record.messageId });
