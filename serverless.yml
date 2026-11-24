@@ -1,6 +1,7 @@
 # "org" ensures this Service is used with the correct Serverless Framework Access Key.
 org: roofbuddy
 service: sls-zoom-workflow
+frameworkVersion: '~4.47.0'
 
 useDotenv: true
 
@@ -9,7 +10,10 @@ provider:
   runtime: nodejs22.x
   region: us-west-2
   stage: ${opt:stage, 'dev'}
-  profile: ${opt:profile, 'roofbuddy-stage'}
+  # The stage picks the AWS account. AWS_PROFILE is ignored once this is set,
+  # which is how prod deploys silently landed in the stage account (Apr 2026).
+  # An unmapped stage fails to resolve, so it cannot fall through to an account.
+  profile: ${self:custom.awsProfile.${sls:stage}}
   memorySize: 128
   timeout: 30
   logRetentionInDays: 7
@@ -33,6 +37,9 @@ provider:
             - !GetAtt EventsQueue.Arn
 
 custom:
+  awsProfile:
+    dev: roofbuddy-stage
+    prod: roofbuddy-prod
   eventsQueueName: sls-zoom-events-${self:provider.stage}.fifo
   dlqName: sls-zoom-events-dlq-${self:provider.stage}.fifo
   serverless-offline:

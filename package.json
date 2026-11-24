@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "serverless offline start",
     "deploy": "serverless deploy",
-    "deploy:prod": "AWS_PROFILE=roofbuddy-prod serverless deploy --stage prod",
+    "deploy:prod": "git diff --quiet HEAD || { echo 'Refusing to deploy prod: commit your changes first.'; exit 1; }; serverless deploy --stage prod",
     "remove": "serverless remove",
     "logs:ingress": "serverless logs -f ingress -t",
     "logs:processor": "serverless logs -f processor -t",
