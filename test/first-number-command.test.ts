@@ -96,3 +96,18 @@ it('rejects a broader Zoom grant', async () => {
     scope:'phone:read:list_call_logs:admin phone:read:call_log:admin phone:read:call_recording:admin'})));
   await expect(zoomToken()).rejects.toThrow('exactly the two');
 });
+
+it('keeps a private provider preview outside Twilio account credentials and ignores an unfinished leg', async () => {
+  const caller = '+12125550101', bridge = '+12125550102', landing = '+12125550103', origin = '+12125550104';
+  const config = { firstPublicNumber: origin, advertised: { [origin]: 'queue111' },
+    ingress: { [bridge]: 'queue111' }, destinations: { queue111: landing } };
+  for (const [k,v] of Object.entries({ ENTRY_SETTINGS: JSON.stringify(config), SLACK_CHANNEL_ID: 'test-channel',
+    FIRST_QUEUE_EXTENSION: 'test-ext', MONDAY_API_TOKEN: 'test-board', SLACK_BOT_TOKEN: 'test-slack', TWILIO_API_KEY: '' })) vi.stubEnv(k,v);
+  const store = { bridgeLegs: vi.fn(async () => [{ parentSid: 'CA'+'a'.repeat(32), childSid: 'CA'+'b'.repeat(32),
+    landing, caller, initiated: Date.now()-20000, dialed: true, completed: false }]), document: vi.fn(), claim: vi.fn() };
+  const date = new Date().toISOString().slice(0,10);
+  expect(await runFirstNumber([date,'--apply'], store)).toEqual({});
+  expect(store.bridgeLegs).toHaveBeenCalledWith(landing,expect.arrayContaining([date]));
+  expect(store.document).not.toHaveBeenCalled();
+  expect(store.claim).not.toHaveBeenCalled();
+});

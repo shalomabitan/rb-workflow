@@ -350,7 +350,11 @@ async function processEvent(
   const isNewCall = !existingCall;
   const queueLabel = routeKindToQueueLabel(classification.routeKind);
 
-  if (isNewCall && queueLabel) {
+  // The early alert and its board item share one owner for this dedicated number.
+  const bridgeOwnsAlert = !!process.env.FIRST_NUMBER_LANDING &&
+    event.callee_phone_e164 === process.env.FIRST_NUMBER_LANDING;
+
+  if (isNewCall && queueLabel && !bridgeOwnsAlert) {
     try {
       const mondayItemId = await mondayCreate({
         callerPhone: event.caller_phone_e164 || 'Unknown',
@@ -382,7 +386,7 @@ async function processEvent(
 
   const shouldPostSlack = queueLabel !== undefined;
 
-  if (shouldPostSlack && isNewCall) {
+  if (shouldPostSlack && isNewCall && !bridgeOwnsAlert) {
     try {
       const mondayUrl = update.monday_item_id ? getMondayItemUrl(update.monday_item_id) : undefined;
       const slackMessage = formatNewCallMessage(

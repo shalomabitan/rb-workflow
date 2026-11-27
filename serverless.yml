@@ -37,6 +37,9 @@ provider:
             - !GetAtt EventsQueue.Arn
 
 custom:
+  firstNumberEnabled:
+    prod: true
+    dev: false
   awsProfile:
     dev: roofbuddy-stage
     prod: roofbuddy-prod
@@ -74,6 +77,8 @@ functions:
 
   processor:
     handler: src/processor.handler
+    environment:
+      FIRST_NUMBER_LANDING: ${ssm:/zoom-workflow/first-number/landing, ''}
     timeout: 30
     memorySize: 1024  # More memory = more CPU = faster cold starts and API fan-out
     events:
@@ -92,6 +97,35 @@ functions:
           path: /proxy/{source}/{webhookId}
           method: POST
 
+  firstNumberVoice:
+    handler: src/first-number-production.voice
+    timeout: 14
+    memorySize: 512
+    role: FirstNumberVoiceRole
+    environment:
+      FIRST_NUMBER_STAGE: ${sls:stage}
+      SUPABASE_SERVICE_KEY: ''
+      MONDAY_API_TOKEN: ''
+      ZOOM_WEBHOOK_SECRET: ''
+      LIFX_TOKEN: ''
+    events:
+      - httpApi: { path: /incoming, method: POST }
+      - httpApi: { path: /incoming-progress, method: POST }
+
+  firstNumberLink:
+    handler: src/first-number-production.link
+    timeout: 110
+    memorySize: 512
+    role: FirstNumberLinkRole
+    environment:
+      FIRST_NUMBER_STAGE: ${sls:stage}
+      ZOOM_WEBHOOK_SECRET: ''
+      LIFX_TOKEN: ''
+    events:
+      - schedule:
+          rate: rate(2 minutes)
+          enabled: ${self:custom.firstNumberEnabled.${sls:stage}}
+
   dlqAlert:
     handler: src/dlq-alert.handler
     timeout: 10
@@ -103,6 +137,51 @@ functions:
 
 resources:
   Resources:
+    FirstNumberVoiceRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal: { Service: lambda.amazonaws.com }
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Policies:
+          - PolicyName: ReadVoiceParameters
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: ssm:GetParameters
+                  Resource:
+                    - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/zoom-workflow/first-number/twilio-account'
+                    - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/zoom-workflow/first-number/route'
+
+    FirstNumberLinkRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal: { Service: lambda.amazonaws.com }
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        Policies:
+          - PolicyName: ReadVoiceParameters
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: ssm:GetParameters
+                  Resource:
+                    - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/zoom-workflow/first-number/twilio-account'
+                    - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/zoom-workflow/first-number/route'
+                    - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/zoom-workflow/first-number/zoom-call-history'
+
     # SQS: Dead Letter Queue
     EventsDLQ:
       Type: AWS::SQS::Queue

@@ -18,4 +18,6 @@ An explicit `--apply` reserves the provider identities and adopts the original S
 
 ## Rollout verification
 
-The command has no enabled schedule. Run a private end-to-end call through the actual forwarder and verify the original Slack post, the board row, the timing relative to the team ring and the existing processor's ownership. An independent Zoom notification that precedes adoption is reported as a conflict. Production activation requires resolving that timing case and verifying that the production runner can read both Zoom call paths. Keep all comparable calls on unrelated public lines on their existing route.
+The production stack runs the linker every two minutes. It retries completed calls after Zoom publishes their histories, checks the preceding UTC day around midnight, and reads saved edit receipts on subsequent runs. The production webhook verifies Twilio's signature before returning dialing instructions or processing a progress event. Configure the Twilio voice number with an independently hosted fallback that dials the dedicated Zoom landing number.
+
+The existing processor continues storing events for the dedicated landing number. The bridge owns the initial Slack message and the linked board item for that number. Verify a public call against the first Zoom member ring, the original Slack timestamp, and the board item’s Zoom ID. To reverse the phone change, route the public number directly to its original Zoom queue.
