@@ -12,6 +12,8 @@ The command requires the single-number configuration in `ENTRY_SETTINGS`, the de
 
 A match requires the public Zoom line to show forwarding to the configured bridge. It also requires a unique incoming call on the private queue number, agreement with the actual Twilio dial attempt, and the original Slack post with matching metadata. Hidden caller IDs, competing calls, modified Slack messages and conflicts in the existing workflow remain unresolved. The report prints counts without caller details.
 
+For the command-line runner, set `ZOOM_CREDENTIAL_PARAMETER` to the encrypted Parameter Store entry and select the intended AWS profile. The runner reads the credential into memory. The issued token must have exactly `phone:read:list_call_logs:admin` and `phone:read:call_log:admin`.
+
 An explicit `--apply` reserves the provider identities and adopts the original Slack parent in the existing workflow. It reuses the item with the exact Zoom call ID. When that item is missing, a single claimant requests its creation. A retry looks up the saved item after a lost response. If the create claim remains pending with no visible item, inspect the Monday request before recovering it. The link is added by editing the original message.
 
 ## Rollout verification

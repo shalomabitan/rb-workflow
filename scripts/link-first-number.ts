@@ -5,6 +5,8 @@ import { createMondayItem, MondayItemInput, MONDAY_BOARD_ID, MONDAY_COLUMNS } fr
 import { updateSlackMessage } from '../src/slack';
 import { EntrySettings, validateEntry } from '../src/twilio-entry';
 import { getSupabaseClient } from '../src/supabase';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -103,17 +105,35 @@ async function message(token: string, channel: string, ts: string): Promise<Orig
   return result.messages?.find(m => m.ts === ts);
 }
 
-async function zoomToken() {
+export async function zoomToken() {
   const url = new URL('https://zoom.us/oauth/token');
-  const authorization = 'Basic ' + Buffer.from(required('ZOOM_CLIENT_ID') + ':' + required('ZOOM_CLIENT_SECRET')).toString('base64');
-  const result = await getJson<{ access_token: string }>(url, { method: 'POST', headers: { authorization },
-    body: new URLSearchParams({ grant_type: 'account_credentials', account_id: required('ZOOM_ACCOUNT_ID') }) });
-  if (!result.access_token) throw Error('Zoom sign-in failed');
+  let credentials: { account_id: string; client_id: string; client_secret: string };
+  if (process.env.ZOOM_CREDENTIAL_PARAMETER) {
+    try {
+      const { stdout } = await promisify(execFile)('aws', ['ssm', 'get-parameter', '--region', 'us-west-2',
+        '--with-decryption', '--name', process.env.ZOOM_CREDENTIAL_PARAMETER, '--output', 'json', '--no-cli-pager']);
+      const { Parameter } = JSON.parse(stdout);
+      if (Parameter.Type !== 'SecureString') throw Error();
+      credentials = JSON.parse(Parameter.Value);
+    } catch {
+      throw Error('Could not read the encrypted Zoom credential from AWS Parameter Store');
+    }
+  } else {
+    credentials = { account_id: required('ZOOM_ACCOUNT_ID'), client_id: required('ZOOM_CLIENT_ID'), client_secret: required('ZOOM_CLIENT_SECRET') };
+  }
+  if (![credentials.account_id, credentials.client_id, credentials.client_secret].every(v => typeof v === 'string' && v.length)) {
+    throw Error('Incomplete Zoom credential');
+  }
+  const authorization = 'Basic ' + Buffer.from(credentials.client_id + ':' + credentials.client_secret).toString('base64');
+  const result = await getJson<{ access_token: string; scope: string }>(url, { method: 'POST', headers: { authorization },
+    body: new URLSearchParams({ grant_type: 'account_credentials', account_id: credentials.account_id }) });
+  if (!result.access_token || result.scope?.trim().split(/\s+/).sort().join(' ') !==
+      'phone:read:call_log:admin phone:read:list_call_logs:admin') throw Error('Zoom must grant exactly the two call-history scopes');
   return result.access_token;
 }
 
-async function main() {
-  const [target, mode, ...extra] = process.argv.slice(2);
+export async function runFirstNumber(args: string[]) {
+  const [target, mode, ...extra] = args;
   const start = Date.parse(target + 'T00:00:00Z');
   if (extra.length || (mode && mode !== '--apply') || !Number.isFinite(start) || day(start) !== target ||
       start > Date.now() || Date.now() - start > 6 * dayMs) throw Error('Supply a recent UTC date and optional --apply');
@@ -135,7 +155,7 @@ async function main() {
     authorization, settings.destinations.queue111!, dates);
   const candidates = legs.filter(leg => leg.dialed && leg.completed && /^CA[0-9a-f]{32}$/i.test(leg.parentSid) &&
     leg.initiated >= start && leg.initiated < start + dayMs && leg.initiated < Date.now() - 7000);
-  if (!candidates.length) { console.log('No completed calls old enough to check.'); return; }
+  if (!candidates.length) return {} as Record<string, number>;
   const token = await zoomToken();
   const history = await readZoomHistory(token, dates[0], dates[dates.length - 1]);
   async function claim(key: string, data: Record<string, string>) {
@@ -211,7 +231,9 @@ async function main() {
     }
     totals[status] = (totals[status] || 0) + 1;
   }
+  return totals;
+}
+if (require.main === module) runFirstNumber(process.argv.slice(2)).then(totals => {
   console.log(JSON.stringify(totals));
   if (totals.error) process.exitCode = 1;
-}
-if (require.main === module) main().catch(err => { console.error(err.message); process.exitCode = 1; });
+}).catch(err => { console.error(err.message); process.exitCode = 1; });
