@@ -5,6 +5,7 @@
 export interface SlackPostResult {
   ok: boolean;
   ts?: string; // Thread timestamp for replies
+  channel?: string;
   error?: string;
 }
 
@@ -42,10 +43,11 @@ async function sendSlackMessage(method: 'chat.postMessage' | 'chat.update', botT
     throw new Error(`Slack API error: ${response.status} ${response.statusText}`);
   }
 
-  const result = (await response.json()) as { ok: boolean; ts?: string; error?: string };
+  const result = (await response.json()) as SlackPostResult;
   return {
     ok: result.ok,
     ts: result.ts,
+    channel: result.channel,
     error: result.error,
   };
 }

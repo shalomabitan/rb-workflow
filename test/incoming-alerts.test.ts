@@ -85,6 +85,20 @@ function harness() {
 }
 
 describe('one Twilio parent per original call', () => {
+  it('saves the exact first-number post receipt only after Slack confirms its channel and timestamp', async () => {
+    const { context, event, rows } = harness();
+    const original = '+18555550100';
+    context.ENTRY_SETTINGS = JSON.stringify({ firstPublicNumber: original, ingress: { [queueNumber]: 'queue111' },
+      destinations: { queue111: queueLanding }, advertised: { [original]: 'queue111' } });
+    const post = vi.fn().mockResolvedValue({ ok: true, channel: context.SLACK_CHANNEL_ID, ts: '42.1' });
+    await deliverProgress(context, event, post);
+    expect(rows.get('incoming-' + parent)).toMatchObject({ state: 'posted', receipt: {
+      parentSid: parent, channel: context.SLACK_CHANNEL_ID, ts: '42.1', text: post.mock.calls[0][1].text } });
+    const bad = { ...event, ParentCallSid: 'CA' + 'f'.repeat(32) };
+    post.mockResolvedValue({ ok: true, channel: 'other-channel', ts: '42.2' });
+    await expect(deliverProgress(context, bad, post)).rejects.toThrow('channel not confirmed');
+    expect(rows.get('incoming-' + bad.ParentCallSid)).toMatchObject({ state: 'posting' });
+  });
   it('handles concurrent callbacks, redelivery and a separate call from the same caller', async () => {
     const { context, event } = harness();
     const post = vi.fn().mockResolvedValue({ ok: true, ts: '42.1' });

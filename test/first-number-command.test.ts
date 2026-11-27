@@ -25,7 +25,7 @@ it('runs preview, apply and redelivery through the command entry point with isol
   const message = { ts, text: incomingMessage({ route:'queue111', callerNumber:caller }),
     metadata: { event_type:'roofbuddy_incoming_call', event_payload:{parent_call_sid:parent} } };
   const docs = new Map<string,unknown>([['incoming-' + parent, { route:'queue111', state:'posted', ts, channel:'test-channel',
-    entry:bridge, landing, caller, childSid:child, initiated:start }]]);
+    entry:bridge, landing, caller, childSid:child, initiated:start, receipt: { parentSid:parent, channel:'test-channel', ts, text:message.text } }]]);
   const json = (value: unknown, status=200) => Response.json(value,{status});
   const provider = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : input.toString());
@@ -46,7 +46,8 @@ it('runs preview, apply and redelivery through the command entry point with isol
         if (docs.has(key)) return json({},409);
         docs.set(key,JSON.parse(form.get('Data')!)); return json({},201);
       }
-      return json({data:docs.get(url.pathname.split('/').at(-1)!)});
+      const key = url.pathname.split('/').at(-1)!;
+      return docs.has(key) ? json({data:docs.get(key)}) : json({},404);
     }
     if (url.hostname === 'api.monday.com') {
       const payload=JSON.parse(String(init!.body));
@@ -64,7 +65,8 @@ it('runs preview, apply and redelivery through the command entry point with isol
         expect([edit.channel,edit.ts]).toEqual(['test-channel',ts]);
         edits++; message.text=edit.text; return json({ok:true,ts});
       }
-      expect(url.pathname).toBe('/api/conversations.history'); return json({ok:true,messages:[message]});
+      expect(url.pathname).toBe('/api/chat.getPermalink');
+      return json({ok:true,channel:'test-channel',permalink:'https://example.slack.com/archives/test-channel/p'+ts.replace('.','')});
     }
     if (url.hostname === 'db.example.test' && url.pathname === '/rest/v1/rb_calls') {
       if (method === 'POST') { record ??= JSON.parse(String(init?.body)); return new Response(null,{status:201}); }

@@ -1,6 +1,7 @@
 import { incomingMessage, EntryRoute } from './incoming-alerts';
 import { EntrySettings, validateEntry } from './twilio-entry';
 import { postSlackMessage } from './slack';
+import type { SlackReceipt } from './first-number-link';
 
 interface ParentCall {
   to: string;
@@ -20,7 +21,8 @@ interface ProgressEvent {
 }
 
 type Delivery = { state: 'posting' | 'posted'; route: EntryRoute; channel: string; ts?: string;
-  entry?: string; childSid?: string; caller?: string; callerName?: string; landing?: string; initiated?: number };
+  entry?: string; childSid?: string; caller?: string; callerName?: string; landing?: string; initiated?: number;
+  receipt?: SlackReceipt };
 interface Documents {
   create(options: { uniqueName: string; data: Delivery; ttl: number }): Promise<unknown>;
   (name: string): {
@@ -84,9 +86,9 @@ export async function deliverProgress(context: Context, event: ProgressEvent, po
   }
 
   // Network timeouts and unclear responses retain the claim to prevent a second parent.
+  const text = incomingMessage({ route: event.route, callerNumber: parent.from, callerName: parent.callerName || undefined });
   const result = await post(context.SLACK_BOT_TOKEN, {
-    channel: claim.channel, text: incomingMessage({ route: event.route,
-      callerNumber: parent.from, callerName: parent.callerName || undefined }), unfurl_links: false,
+    channel: claim.channel, text, unfurl_links: false,
     metadata: { event_type: 'roofbuddy_incoming_call', event_payload: { parent_call_sid: event.ParentCallSid } },
   });
   if (!result.ok && result.error) {
@@ -97,6 +99,10 @@ export async function deliverProgress(context: Context, event: ProgressEvent, po
     throw new Error('Slack rejected incoming alert: ' + result.error);
   }
   if (!result.ok || !result.ts) throw new Error('Slack delivery uncertain: ' + key);
+  if (settings.firstPublicNumber) {
+    if (result.channel !== claim.channel) throw Error('Slack delivery channel not confirmed: ' + key);
+    claim.receipt = { parentSid: event.ParentCallSid, channel: result.channel, ts: result.ts, text };
+  }
   await document.update({ data: { ...claim, state: 'posted', ts: result.ts } });
 }
 

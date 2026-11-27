@@ -105,6 +105,17 @@ async function message(token: string, channel: string, ts: string): Promise<Orig
   return result.messages?.find(m => m.ts === ts);
 }
 
+export async function permalinkMatches(token: string, channel: string, ts: string): Promise<boolean> {
+  const url = new URL('https://slack.com/api/chat.getPermalink');
+  url.search = new URLSearchParams({ channel, message_ts: ts }).toString();
+  const result = await getJson<{ ok: boolean; channel?: string; permalink?: string }>(url,
+    { headers: { authorization: 'Bearer ' + token } });
+  if (!result.ok || result.channel !== channel || !result.permalink) return false;
+  const link = new URL(result.permalink);
+  return link.protocol === 'https:' && link.hostname.endsWith('.slack.com') &&
+    link.pathname === '/archives/' + channel + '/p' + ts.replace('.', '');
+}
+
 export async function zoomToken() {
   const url = new URL('https://zoom.us/oauth/token');
   let credentials: { account_id: string; client_id: string; client_secret: string };
@@ -214,6 +225,22 @@ export async function runFirstNumber(args: string[]) {
       return r.data;
     },
     originalMessage: (ch: string, ts: string) => message(slackToken, ch, ts),
+    permalinkMatches: (ch: string, ts: string) => permalinkMatches(slackToken, ch, ts),
+    editRecorded: async (parentSid: string, zoomId: string, itemId: string, channel: string, ts: string) => {
+      try {
+        const saved = await getJson<{ data: Record<string, string> }>(new URL(documents + '/edit-' + parentSid), { headers });
+        if (!Object.entries({ parentSid, zoomId, itemId, channel, ts }).every(([k, v]) => saved.data[k] === v)) {
+          throw Error('Conflicting Slack edit receipt');
+        }
+        return true;
+      } catch (err) {
+        if ((err as { status?: number }).status === 404) return false;
+        throw err;
+      }
+    },
+    recordEdit: async (parentSid: string, zoomId: string, itemId: string, channel: string, ts: string) => {
+      await claim('edit-' + parentSid, { parentSid, zoomId, itemId, channel, ts });
+    },
     forwardedTo: (call: QueueArrival, bridge: string) => forwardedTo(token, call, bridge),
     reserve, createOnce, bindItem, edit: (ch: string, ts: string, text: string) => updateSlackMessage(slackToken, ch, ts, text) };
   const totals: Record<string, number> = {};

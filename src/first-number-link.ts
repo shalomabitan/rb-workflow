@@ -35,8 +35,10 @@ export interface PostedAlert {
   callerName?: string;
   landing?: string;
   initiated?: number;
+  receipt?: SlackReceipt;
 }
 
+export interface SlackReceipt { parentSid: string; channel: string; ts: string; text: string }
 const phone = /^\+[1-9]\d{7,14}$/;
 const sid = /^CA[0-9a-f]{32}$/i;
 
@@ -74,6 +76,9 @@ interface LinkServices {
   itemForZoomCall(id: string): Promise<string | undefined>;
   workflowOwner(id: string): Promise<{ slack_parent_ts?: string | null; monday_item_id?: string | null } | null>;
   originalMessage(channel: string, ts: string): Promise<OriginalMessage | undefined>;
+  permalinkMatches(channel: string, ts: string): Promise<boolean>;
+  editRecorded(parentSid: string, zoomId: string, item: string, channel: string, ts: string): Promise<boolean>;
+  recordEdit(parentSid: string, zoomId: string, item: string, channel: string, ts: string): Promise<void>;
   forwardedTo(call: QueueArrival, bridge: string): Promise<boolean>;
   reserve(parentSid: string, zoomId: string, channel: string, ts: string, observedItem: string | undefined,
     caller: string, started: number, ended: number, status: 'ANSWERED' | 'ENDED'): Promise<void>;
@@ -110,18 +115,28 @@ export async function linkFirstNumber(leg: BridgeLeg, allLegs: BridgeLeg[], hist
       allLegs.some(other => other.childSid !== leg.childSid && origins.some(row => possibleOrigin(other, row))) ||
       !await services.forwardedTo(origin, alert.entry)) return 'unverified-origin';
   const ts = alert.ts!;
-  const original = await services.originalMessage(channel, ts);
-  if (original?.ts !== ts || original.metadata?.event_type !== 'roofbuddy_incoming_call' ||
-      original.metadata.event_payload?.parent_call_sid !== leg.parentSid) return 'unverified-message';
   const call = { route: 'queue111' as const, callerNumber: leg.caller, callerName: alert.callerName };
   const expected = incomingMessage(call);
+  let originalText: string;
+  if (alert.receipt) {
+    const r = alert.receipt;
+    if (r.channel !== channel || r.ts !== ts || r.parentSid !== leg.parentSid || r.text !== expected ||
+        !await services.permalinkMatches(channel, ts)) return 'unverified-message';
+    originalText = r.text;
+  } else {
+    const original = await services.originalMessage(channel, ts);
+    if (original?.ts !== ts || original.metadata?.event_type !== 'roofbuddy_incoming_call' ||
+        original.metadata.event_payload?.parent_call_sid !== leg.parentSid) return 'unverified-message';
+    originalText = original.text;
+  }
   let item = await services.itemForZoomCall(zoomId);
   if (item && !/^\d+$/.test(item)) throw Error('Invalid Monday item ID');
   const owner = await services.workflowOwner(zoomId);
   if ((owner?.slack_parent_ts && owner.slack_parent_ts !== ts) ||
       (owner?.monday_item_id && String(owner.monday_item_id) !== item)) return 'workflow-conflict';
-  const alreadyLinked = !!item && original.text === incomingMessage({ ...call, mondayItemId: item });
-  if (!alreadyLinked && original.text !== expected) return 'message-changed';
+  const alreadyLinked = !!item && (originalText === incomingMessage({ ...call, mondayItemId: item }) ||
+    (!!alert.receipt && await services.editRecorded(leg.parentSid, zoomId, item, channel, ts)));
+  if (!alreadyLinked && originalText !== expected) return 'message-changed';
   if (!apply) return alreadyLinked ? 'already-linked' : item ? 'ready' : 'would-create-item';
   const status = arrival.call_result === 'answered' ? 'ANSWERED' : 'ENDED';
   await services.reserve(leg.parentSid, zoomId, channel, ts, item, leg.caller, leg.initiated, ended, status);
@@ -138,5 +153,6 @@ export async function linkFirstNumber(leg: BridgeLeg, allLegs: BridgeLeg[], hist
   const linked = incomingMessage({ ...call, mondayItemId: item });
   const result = await services.edit(channel, ts, linked);
   if (!result.ok || result.ts !== ts) throw Error('Original Slack alert edit was not confirmed');
+  await services.recordEdit(leg.parentSid, zoomId, item, channel, ts);
   return 'linked';
 }

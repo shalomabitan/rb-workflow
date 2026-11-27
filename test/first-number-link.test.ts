@@ -23,6 +23,7 @@ function fixture(initial?: string) {
   const create = vi.fn(async () => { item = '77'; return item; });
   const services = {
     itemForZoomCall: vi.fn(async () => item), originalMessage: vi.fn(async () => ({ ...message })),
+    permalinkMatches: vi.fn(async () => true), editRecorded: vi.fn(async () => false), recordEdit: vi.fn(async () => {}),
     workflowOwner: vi.fn(async (): Promise<{ slack_parent_ts?: string; monday_item_id?: string } | null> => null),
     forwardedTo: vi.fn(async () => true), reserve: vi.fn(async () => {}),
     createOnce: vi.fn(async () => { if (claimed) return; claimed = true; return create(); }),
