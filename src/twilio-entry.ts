@@ -98,7 +98,7 @@ export function incomingTwiml(to: string, settings: EntrySettings): string {
   const route = settings.ingress[to];
   const destination = settings.destinations[route];
   return '<Response><Dial answerOnBridge="true"><Number statusCallback="/incoming-progress?route=' +
-    route + '" statusCallbackEvent="initiated" statusCallbackMethod="POST">' +
+    route + '" statusCallbackEvent="initiated completed" statusCallbackMethod="POST">' +
     destination + '</Number></Dial></Response>';
 }
 

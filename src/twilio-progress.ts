@@ -41,6 +41,7 @@ interface Context {
   SYNC_SERVICE_SID: string;
   SLACK_BOT_TOKEN: string;
   SLACK_CHANNEL_ID: string;
+  rememberBridge?(phone: string, sid: string, started: number): Promise<void>;
   getTwilioClient(): Client;
 }
 
@@ -68,6 +69,7 @@ export async function deliverProgress(context: Context, event: ProgressEvent, po
   if (parent.direction !== 'inbound' || !Object.hasOwn(settings.ingress, parent.to) ||
       settings.ingress[parent.to] !== event.route) throw new Error('Parent call does not match the entry route');
 
+  await context.rememberBridge?.(parent.from, event.ParentCallSid, Date.parse(event.Timestamp));
   const documents = client.sync.v1.services(context.SYNC_SERVICE_SID).documents;
   const key = 'incoming-' + event.ParentCallSid;
   const document = documents(key);

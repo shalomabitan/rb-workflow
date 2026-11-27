@@ -27,7 +27,7 @@ function fixture(initial?: string) {
     workflowOwner: vi.fn(async (): Promise<{ slack_parent_ts?: string; monday_item_id?: string } | null> => null),
     forwardedTo: vi.fn(async () => true), reserve: vi.fn(async () => {}),
     createOnce: vi.fn(async () => { if (claimed) return; claimed = true; return create(); }),
-    bindItem: vi.fn(async () => {}), edit: vi.fn(async (_ch: string, _ts: string, text: string) => {
+    ensureNumberCalled: vi.fn(async () => {}), bindItem: vi.fn(async () => {}), edit: vi.fn(async (_ch: string, _ts: string, text: string) => {
       message.text = text; return { ok: true, ts }; }),
   };
   const run = (apply = true, legs = [leg], rows: QueueArrival[] = [arrival, outer], receipt = alert) =>
@@ -41,6 +41,7 @@ describe('the first-number bridge', () => {
     expect(await f.run()).toBe('linked');
     expect(f.services.itemForZoomCall).toHaveBeenCalledWith('1001');
     expect(f.create).not.toHaveBeenCalled();
+    expect(f.services.ensureNumberCalled).toHaveBeenCalledWith('77', '1001', original);
     expect(f.services.edit).toHaveBeenCalledWith('test', ts, incomingMessage({ route: 'queue111', callerNumber: caller, mondayItemId: '77' }));
     expect(await f.run()).toBe('already-linked');
     expect(f.services.edit).toHaveBeenCalledTimes(1);

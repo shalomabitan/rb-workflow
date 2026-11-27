@@ -85,6 +85,7 @@ interface LinkServices {
   reserve(parentSid: string, zoomId: string, channel: string, ts: string, observedItem: string | undefined,
     caller: string, started: number, ended: number, status: 'ANSWERED' | 'ENDED', queue: QueueIdentity): Promise<void>;
   createOnce(parentSid: string, input: MondayItemInput): Promise<string | undefined>;
+  ensureNumberCalled?(item: string, zoomId: string, number: string): Promise<void>;
   bindItem(parentSid: string, zoomId: string, item: string): Promise<void>;
   edit(channel: string, ts: string, text: string): Promise<{ ok: boolean; ts?: string }>;
 }
@@ -150,6 +151,7 @@ export async function linkFirstNumber(leg: BridgeLeg, allLegs: BridgeLeg[], hist
   if (!apply) return alreadyLinked ? 'already-linked' : item ? 'ready' : 'would-create-item';
   const status = arrival.call_result === 'answered' ? 'ANSWERED' : 'ENDED';
   await services.reserve(leg.parentSid, zoomId, channel, ts, item, leg.caller, leg.initiated, ended, status, ownership);
+  if (item && !alreadyLinked) await services.ensureNumberCalled?.(item, zoomId, origin.callee_did_number);
   if (!item) {
     item = await services.createOnce(leg.parentSid, { zoomCallId: zoomId, callerPhone: leg.caller,
       callerName: alert.callerName, incomingDateIso: new Date(origin.start_time!).toISOString(),

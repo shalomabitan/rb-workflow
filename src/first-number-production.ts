@@ -1,6 +1,8 @@
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import { GetParametersCommand, SSMClient } from '@aws-sdk/client-ssm';
 import twilio from 'twilio';
+import { endBridge, rememberBridge } from './bridge-notices';
+import { releaseUnrelatedNotices } from './deferred-alert';
 import { EntryRoute } from './incoming-alerts';
 import { EntrySettings, incomingTwiml, publicNumbersFor, validateEntry } from './twilio-entry';
 import { deliverProgress } from './twilio-progress';
@@ -40,7 +42,7 @@ async function configuration(worker: boolean): Promise<Configuration> {
 function progressContext({ auth, route }: Configuration) {
   const client = twilio(auth.account, auth.token, { timeout: 5000 });
   return { ACCOUNT_SID: auth.account, ENTRY_SETTINGS: JSON.stringify(route.settings), SYNC_SERVICE_SID: route.sync,
-    SLACK_CHANNEL_ID: route.channel, SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN!, getTwilioClient: () => client };
+    SLACK_CHANNEL_ID: route.channel, SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN!, getTwilioClient: () => client, rememberBridge };
 }
 
 // Verify the exact public URL and every form field before interpreting the callback.
@@ -69,12 +71,18 @@ export async function voice(event: APIGatewayProxyEventV2) {
   const field = (key: string) => form.get(key) || '';
   if (event.rawPath === '/incoming') {
     if (field('Direction') !== 'inbound' || !Object.hasOwn(config.route.settings.ingress, field('To'))) return { statusCode: 400 };
+    await rememberBridge(field('From'), field('CallSid'), Date.now());
     return { statusCode: 200, headers: { 'content-type': 'application/xml' },
       body: incomingTwiml(field('To'), config.route.settings) };
   }
   const route = event.queryStringParameters?.route;
   if (event.rawPath !== '/incoming-progress' || (route !== 'queue111' && route !== 'receptionist') ||
       !publicNumbersFor(config.route.settings, route).length) return { statusCode: 400 };
+  if (['completed', 'busy', 'failed', 'no-answer', 'canceled'].includes(field('CallStatus'))) {
+    if (field('To') !== config.route.settings.destinations[route]) return { statusCode: 400 };
+    await endBridge(field('From'), field('ParentCallSid'), Date.parse(field('Timestamp')));
+    return { statusCode: 204 };
+  }
   await deliverProgress(progressContext(config), { route, AccountSid: field('AccountSid'),
     CallSid: field('CallSid'), ParentCallSid: field('ParentCallSid'), CallStatus: field('CallStatus'),
     Timestamp: field('Timestamp'), To: field('To') });
@@ -104,5 +112,6 @@ export async function link() {
       if (counts.error || counts['workflow-conflict'] || counts['unverified-message']) failed = true;
     }
   }
+  await releaseUnrelatedNotices(config.zoom!, route.settings, route.channel);
   if (failed) throw Error('Review first-number link outcomes');
 }

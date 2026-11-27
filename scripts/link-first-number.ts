@@ -3,7 +3,7 @@
 import { firstQueueNode, ZoomElement } from '../src/zoom-alert-update';
 import { EntryRoute } from '../src/incoming-alerts';
 import { QueueIdentity, BridgeLeg, linkFirstNumber, OriginalMessage, PostedAlert, QueueArrival } from '../src/first-number-link';
-import { createMondayItem, MondayItemInput, MONDAY_BOARD_ID, MONDAY_COLUMNS } from '../src/monday';
+import { createMondayItem, ensureNumberCalled, MondayItemInput, MONDAY_BOARD_ID, MONDAY_COLUMNS } from '../src/monday';
 import { updateSlackMessage } from '../src/slack';
 import { EntrySettings, publicNumbersFor, validateEntry } from '../src/twilio-entry';
 import { getSupabaseClient } from '../src/supabase';
@@ -294,6 +294,7 @@ export async function runFirstNumber(args: string[], suppliedStore?: FirstNumber
       return { extension: first.callee_ext_number, name: config.data?.name || first.callee_name || first.callee_ext_number,
         kind: config.data?.route_kind || 'OTHER' };
     },
+    ensureNumberCalled: (item: string, id: string, number: string) => ensureNumberCalled(boardToken, item, id, number),
     reserve, createOnce, bindItem, edit: (ch: string, ts: string, text: string) => updateSlackMessage(slackToken, ch, ts, text) };
   const totals: Record<string, number> = {};
   for (const leg of candidates) {
