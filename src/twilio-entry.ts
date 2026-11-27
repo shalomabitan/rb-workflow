@@ -6,6 +6,7 @@ export interface EntrySettings {
   destinations: Partial<Record<EntryRoute, string>>;
   advertised: RoutingTable;
   firstPublicNumber?: string;
+  publicNumbers?: Partial<Record<EntryRoute, string[]>>;
 }
 
 const phone = /^\+[1-9]\d{7,14}$/;
@@ -16,7 +17,24 @@ const routes: EntryRoute[] = ['queue111', 'receptionist'];
 export function validateEntry(settings: EntrySettings): void {
   const active = Object.entries(settings.ingress);
   if (!active.length) throw new Error('No Twilio entry numbers configured');
-  if (settings.firstPublicNumber) {
+  if (settings.publicNumbers) {
+    const owned = new Set<string>();
+    for (const [route, numbers] of Object.entries(settings.publicNumbers)) {
+      if (!routes.includes(route as EntryRoute) || !Array.isArray(numbers) || !numbers.length ||
+          active.filter(([, configured]) => configured === route).length !== 1) throw Error('Missing dedicated voice route');
+      for (const number of numbers) {
+        if (!phone.test(number) || owned.has(number) || settings.advertised[number] !== route) throw Error('Invalid public number assignment');
+        owned.add(number);
+      }
+    }
+    if (settings.firstPublicNumber && !settings.publicNumbers.queue111?.includes(settings.firstPublicNumber)) {
+      throw Error('Existing public number missing from queue route');
+    }
+    if (active.some(([entry, route]) => !settings.publicNumbers?.[route]?.length ||
+        Object.hasOwn(settings.advertised, entry) || Object.hasOwn(settings.advertised, settings.destinations[route] || ''))) {
+      throw Error('Public numbers cannot be private bridges or destinations');
+    }
+  } else if (settings.firstPublicNumber) {
     const original = settings.firstPublicNumber;
     const [bridge] = active;
     if (!phone.test(original) || settings.advertised[original] !== 'queue111' ||
@@ -41,6 +59,10 @@ export function validateEntry(settings: EntrySettings): void {
   if (used.size > 1 && settings.destinations.queue111 === settings.destinations.receptionist) {
     throw new Error('The queue and the main menu need distinct landing numbers');
   }
+}
+
+export function publicNumbersFor(settings: EntrySettings, route: EntryRoute): string[] {
+  return settings.publicNumbers?.[route] ?? (route === 'queue111' && settings.firstPublicNumber ? [settings.firstPublicNumber] : []);
 }
 
 // For the first public cutover, neither end of the private bridge can be
@@ -76,7 +98,7 @@ export function incomingTwiml(to: string, settings: EntrySettings): string {
   const route = settings.ingress[to];
   const destination = settings.destinations[route];
   return '<Response><Dial answerOnBridge="true"><Number statusCallback="/incoming-progress?route=' +
-    route + '" statusCallbackEvent="initiated" statusCallbackMethod="POST">' +
+    route + '" statusCallbackEvent="initiated completed" statusCallbackMethod="POST">' +
     destination + '</Number></Dial></Response>';
 }
 

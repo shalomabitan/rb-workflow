@@ -58,7 +58,7 @@ export interface MondayItemInput {
   callerName?: string;
   incomingDateIso: string;
   callStatus: keyof typeof STATUS_LABELS;
-  callQueue: keyof typeof QUEUE_LABELS;
+  callQueue?: keyof typeof QUEUE_LABELS;
   source?: string;
   numberCalled?: string;
   zoomCallId: string;
@@ -122,6 +122,28 @@ async function changeMultipleColumnValues(
   }
 }
 
+export async function ensureNumberCalled(apiToken: string, itemId: string, zoomId: string, number: string) {
+  const query = 'query($id:ID!, $cols:[String!]!){items(ids:[$id]){board{id} column_values(ids:$cols){id text}}}';
+  const response = await fetch('https://api.monday.com/v2', { method: 'POST', headers: {
+    'Content-Type': 'application/json', Authorization: apiToken }, body: JSON.stringify({ query,
+    variables: { id: itemId, cols: [MONDAY_COLUMNS.NUMBER_CALLED, MONDAY_COLUMNS.ZOOM_CALL_ID] } }) });
+  if (!response.ok) throw Error('Could not verify the incoming call item');
+  const result = await response.json() as { errors?: unknown[]; data?: { items: { board: { id: string };
+    column_values: { id: string; text: string | null }[] }[] } };
+  const item = result.data?.items[0];
+  const value = (key: string) => item?.column_values.find(v => v.id === key);
+  if (result.errors?.length || item?.board.id !== MONDAY_BOARD_ID || value(MONDAY_COLUMNS.ZOOM_CALL_ID)?.text !== zoomId ||
+      !value(MONDAY_COLUMNS.NUMBER_CALLED)) throw Error('Cannot verify number called on the existing item');
+  const current = value(MONDAY_COLUMNS.NUMBER_CALLED)?.text?.replace(/\D/g, '');
+  if (current) {
+    if (current !== number.slice(1) && !(number.startsWith('+1') && current === number.slice(2))) {
+      throw Error('Different public number already stored on this item');
+    }
+    return;
+  }
+  await changeMultipleColumnValues(apiToken, itemId, { [MONDAY_COLUMNS.NUMBER_CALLED]: { phone: number, countryShortName: 'US' } });
+}
+
 export async function updateMondayItemStatus(
   apiToken: string,
   itemId: string,
@@ -150,9 +172,10 @@ export async function createMondayItem(
     [MONDAY_COLUMNS.CALLER_PHONE]: { phone: input.callerPhone, countryShortName: 'US' },
     [MONDAY_COLUMNS.INCOMING_DATE]: { date: input.incomingDateIso.split('T')[0], time: input.incomingDateIso.split('T')[1]?.substring(0, 8) },
     [MONDAY_COLUMNS.CALL_STATUS]: { index: parseInt(STATUS_LABELS[input.callStatus], 10) },
-    [MONDAY_COLUMNS.CALL_QUEUE]: { index: parseInt(QUEUE_LABELS[input.callQueue], 10) },
     [MONDAY_COLUMNS.ZOOM_CALL_ID]: input.zoomCallId,
   };
+
+  if (input.callQueue) columnValues[MONDAY_COLUMNS.CALL_QUEUE] = { index: parseInt(QUEUE_LABELS[input.callQueue], 10) };
 
   if (input.source) {
     columnValues[MONDAY_COLUMNS.SOURCE] = input.source;

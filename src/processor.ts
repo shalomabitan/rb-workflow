@@ -14,6 +14,7 @@ import {
 import { createMondayItem, updateMondayItemStatus, getMondayItemUrl, MondayItemInput, QUEUE_LABELS, STATUS_LABELS } from './monday';
 import { getSupabaseClient, SupabaseClientType } from './supabase';
 import { postSlackMessage, formatNewCallMessage, formatStatusUpdateMessage } from './slack';
+import { mightBeBridged, deferNotice } from './bridge-notices';
 import { turnBulbOff } from './lifx';
 
 // ===================
@@ -351,8 +352,11 @@ async function processEvent(
   const queueLabel = routeKindToQueueLabel(classification.routeKind);
 
   // The early alert and its board item share one owner for this dedicated number.
-  const bridgeOwnsAlert = !!process.env.FIRST_NUMBER_LANDING &&
-    event.callee_phone_e164 === process.env.FIRST_NUMBER_LANDING;
+  const bridgeOwnsAlert = !!event.callee_phone_e164 &&
+    [process.env.FIRST_NUMBER_LANDING, process.env.MENU_LANDING].includes(event.callee_phone_e164);
+
+  const reviewNotice = isNewCall && !!queueLabel && !bridgeOwnsAlert && await mightBeBridged(event);
+  if (reviewNotice) await deferNotice(event);
 
   if (isNewCall && queueLabel && !bridgeOwnsAlert) {
     try {
@@ -386,7 +390,7 @@ async function processEvent(
 
   const shouldPostSlack = queueLabel !== undefined;
 
-  if (shouldPostSlack && isNewCall && !bridgeOwnsAlert) {
+  if (shouldPostSlack && isNewCall && !bridgeOwnsAlert && !reviewNotice) {
     try {
       const mondayUrl = update.monday_item_id ? getMondayItemUrl(update.monday_item_id) : undefined;
       const slackMessage = formatNewCallMessage(

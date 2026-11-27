@@ -35,6 +35,9 @@ provider:
             - sqs:SendMessage
           Resource:
             - !GetAtt EventsQueue.Arn
+        - Effect: Allow
+          Action: [dynamodb:Query, dynamodb:PutItem]
+          Resource: !GetAtt BridgeNoticeTable.Arn
 
 custom:
   firstNumberEnabled:
@@ -78,6 +81,8 @@ functions:
   processor:
     handler: src/processor.handler
     environment:
+      BRIDGE_NOTICE_TABLE: !Ref BridgeNoticeTable
+      MENU_LANDING: ${ssm:/zoom-workflow/first-number/menu-landing, ''}
       FIRST_NUMBER_LANDING: ${ssm:/zoom-workflow/first-number/landing, ''}
     timeout: 30
     memorySize: 1024  # More memory = more CPU = faster cold starts and API fan-out
@@ -103,6 +108,7 @@ functions:
     memorySize: 512
     role: FirstNumberVoiceRole
     environment:
+      BRIDGE_NOTICE_TABLE: !Ref BridgeNoticeTable
       FIRST_NUMBER_STAGE: ${sls:stage}
       SUPABASE_SERVICE_KEY: ''
       MONDAY_API_TOKEN: ''
@@ -118,6 +124,7 @@ functions:
     memorySize: 512
     role: FirstNumberLinkRole
     environment:
+      BRIDGE_NOTICE_TABLE: !Ref BridgeNoticeTable
       FIRST_NUMBER_STAGE: ${sls:stage}
       ZOOM_WEBHOOK_SECRET: ''
       LIFX_TOKEN: ''
@@ -137,6 +144,18 @@ functions:
 
 resources:
   Resources:
+    BridgeNoticeTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - { AttributeName: pk, AttributeType: S }
+          - { AttributeName: sk, AttributeType: S }
+        KeySchema:
+          - { AttributeName: pk, KeyType: HASH }
+          - { AttributeName: sk, KeyType: RANGE }
+        TimeToLiveSpecification: { AttributeName: expires, Enabled: true }
+
     FirstNumberVoiceRole:
       Type: AWS::IAM::Role
       Properties:
@@ -158,6 +177,10 @@ resources:
                   Resource:
                     - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/zoom-workflow/first-number/twilio-account'
                     - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/zoom-workflow/first-number/route'
+
+                - Effect: Allow
+                  Action: dynamodb:UpdateItem
+                  Resource: !GetAtt BridgeNoticeTable.Arn
 
     FirstNumberLinkRole:
       Type: AWS::IAM::Role
@@ -181,6 +204,10 @@ resources:
                     - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/zoom-workflow/first-number/twilio-account'
                     - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/zoom-workflow/first-number/route'
                     - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/zoom-workflow/first-number/zoom-call-history'
+
+                - Effect: Allow
+                  Action: [dynamodb:Query, dynamodb:UpdateItem, dynamodb:DeleteItem]
+                  Resource: !GetAtt BridgeNoticeTable.Arn
 
     # SQS: Dead Letter Queue
     EventsDLQ:
