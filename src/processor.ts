@@ -351,8 +351,8 @@ async function processEvent(
   const queueLabel = routeKindToQueueLabel(classification.routeKind);
 
   // The early alert and its board item share one owner for this dedicated number.
-  const bridgeOwnsAlert = !!process.env.FIRST_NUMBER_LANDING &&
-    event.callee_phone_e164 === process.env.FIRST_NUMBER_LANDING;
+  const bridgeOwnsAlert = !!event.callee_phone_e164 &&
+    [process.env.FIRST_NUMBER_LANDING, process.env.MENU_LANDING].includes(event.callee_phone_e164);
 
   if (isNewCall && queueLabel && !bridgeOwnsAlert) {
     try {

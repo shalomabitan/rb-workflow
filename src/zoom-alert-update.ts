@@ -9,6 +9,15 @@ interface ZoomCallPath {
   call_path: (CallLogEntry & { is_node?: number; segment?: number })[];
 }
 
+export type ZoomElement = ZoomCallPath['call_path'][number];
+
+export function firstQueueNode(id: string, elements: ZoomElement[]) {
+  const nodes = elements.filter(leg => leg.call_id === id && leg.is_node === 1 &&
+    leg.callee_ext_type === 'call_queue' && leg.callee_ext_number && leg.direction === 'inbound');
+  return nodes.sort((a, b) => (a.segment ?? 1) - (b.segment ?? 1) ||
+    (a.node ?? Infinity) - (b.node ?? Infinity))[0];
+}
+
 interface ConfirmedParent {
   zoomCallId: string;
   channel: string;
@@ -25,11 +34,7 @@ export async function applyZoomPath(token: string, parent: ConfirmedParent, hist
   if (history.direction !== 'inbound' || history.call_id !== parent.zoomCallId) {
     throw new Error('Zoom history does not match the confirmed Slack parent');
   }
-  const nodes = history.call_path.filter(leg => leg.call_id === history.call_id && leg.is_node === 1 &&
-    leg.callee_ext_type === 'call_queue' && leg.callee_ext_number && leg.direction === 'inbound');
-  // Zoom assigns increasing segment/node positions within a call path.
-  const first = nodes.sort((a, b) => (a.segment ?? 1) - (b.segment ?? 1) ||
-    (a.node ?? Infinity) - (b.node ?? Infinity))[0];
+  const first = firstQueueNode(history.call_id, history.call_path);
   let firstQueue: IncomingCall['firstQueue'];
   if (first?.callee_ext_number) {
     const config = queues.get(first.callee_ext_number);

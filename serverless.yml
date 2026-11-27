@@ -78,6 +78,7 @@ functions:
   processor:
     handler: src/processor.handler
     environment:
+      MENU_LANDING: ${ssm:/zoom-workflow/first-number/menu-landing, ''}
       FIRST_NUMBER_LANDING: ${ssm:/zoom-workflow/first-number/landing, ''}
     timeout: 30
     memorySize: 1024  # More memory = more CPU = faster cold starts and API fan-out

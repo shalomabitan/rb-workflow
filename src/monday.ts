@@ -58,7 +58,7 @@ export interface MondayItemInput {
   callerName?: string;
   incomingDateIso: string;
   callStatus: keyof typeof STATUS_LABELS;
-  callQueue: keyof typeof QUEUE_LABELS;
+  callQueue?: keyof typeof QUEUE_LABELS;
   source?: string;
   numberCalled?: string;
   zoomCallId: string;
@@ -150,9 +150,10 @@ export async function createMondayItem(
     [MONDAY_COLUMNS.CALLER_PHONE]: { phone: input.callerPhone, countryShortName: 'US' },
     [MONDAY_COLUMNS.INCOMING_DATE]: { date: input.incomingDateIso.split('T')[0], time: input.incomingDateIso.split('T')[1]?.substring(0, 8) },
     [MONDAY_COLUMNS.CALL_STATUS]: { index: parseInt(STATUS_LABELS[input.callStatus], 10) },
-    [MONDAY_COLUMNS.CALL_QUEUE]: { index: parseInt(QUEUE_LABELS[input.callQueue], 10) },
     [MONDAY_COLUMNS.ZOOM_CALL_ID]: input.zoomCallId,
   };
+
+  if (input.callQueue) columnValues[MONDAY_COLUMNS.CALL_QUEUE] = { index: parseInt(QUEUE_LABELS[input.callQueue], 10) };
 
   if (input.source) {
     columnValues[MONDAY_COLUMNS.SOURCE] = input.source;

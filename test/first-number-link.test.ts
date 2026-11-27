@@ -45,6 +45,36 @@ describe('the first-number bridge', () => {
     expect(await f.run()).toBe('already-linked');
     expect(f.services.edit).toHaveBeenCalledTimes(1);
   });
+  it('uses the public number proven by the forwarding leg on a shared queue bridge', async () => {
+    const second = '+12125550144';
+    const shared = { ...settings, advertised: { ...settings.advertised, [second]: 'queue111' as const },
+      publicNumbers: { queue111: [original, second] } };
+    const f = fixture();
+    const origin = { ...outer, callee_did_number: second };
+    expect(await linkFirstNumber(leg, [leg], [arrival, origin], alert, shared, 'test', queue, f.services, true)).toBe('linked');
+    expect(f.services.createOnce).toHaveBeenCalledWith(leg.parentSid, expect.objectContaining({ numberCalled: second }));
+    expect(await linkFirstNumber(leg, [leg], [arrival, outer, origin], alert, shared, 'test', queue, f.services, true)).toBe('unverified-origin');
+  });
+  it.each([true, false])('links one menu alert with or without a queue selection (%s)', async selected => {
+    const menu = '+12125550155', menuEntry = '+12125550156', menuLanding = '+12125550157';
+    const multi = { ...settings, advertised: { ...settings.advertised, [menu]: 'receptionist' as const },
+      ingress: { ...settings.ingress, [menuEntry]: 'receptionist' as const },
+      destinations: { ...settings.destinations, receptionist: menuLanding },
+      publicNumbers: { queue111: [original], receptionist: [menu] } };
+    const menuLeg = { ...leg, landing: menuLanding };
+    const rows = [{ ...arrival, callee_did_number: menuLanding, callee_ext_type: 'auto_receptionist', callee_ext_number: '9003' },
+      { ...outer, callee_did_number: menu }];
+    const text = incomingMessage({ route: 'receptionist', callerNumber: caller });
+    const receipt = { ...alert, route: 'receptionist', entry: menuEntry, landing: menuLanding,
+      receipt: { parentSid: leg.parentSid, channel: 'test', ts, text } };
+    const f = fixture();
+    const services = { ...f.services, menuQueue: async () => selected ? { name: '111', kind: 'MAIN', extension: queue } : undefined };
+    expect(await linkFirstNumber(menuLeg, [menuLeg], rows, receipt, multi, 'test', '9003', services, true)).toBe('linked');
+    expect(f.services.createOnce).toHaveBeenCalledWith(leg.parentSid, expect.objectContaining({
+      numberCalled: menu, source: selected ? '111' : 'Main Auto Receptionist', callQueue: selected ? 'MAIN' : undefined }));
+    expect(f.services.edit).toHaveBeenCalledWith('test', ts, expect.stringContaining(selected ? '111 (MAIN)' : 'Main Auto Receptionist (MAIN MENU)'));
+    expect(f.services.edit).toHaveBeenCalledTimes(1);
+  });
   it('handles simultaneous member events, two workers and a later redelivery', async () => {
     const f = fixture();
     const rows = [outer, arrival, { ...arrival }, { ...arrival, callee_ext_type: 'user' }];

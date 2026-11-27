@@ -1,9 +1,11 @@
 // Usage: npm run link:first-number -- YYYY-MM-DD [--apply]. The date is UTC.
 // Reads complete neighboring days so calls across midnight can disqualify a match.
-import { BridgeLeg, linkFirstNumber, OriginalMessage, PostedAlert, QueueArrival } from '../src/first-number-link';
+import { firstQueueNode, ZoomElement } from '../src/zoom-alert-update';
+import { EntryRoute } from '../src/incoming-alerts';
+import { QueueIdentity, BridgeLeg, linkFirstNumber, OriginalMessage, PostedAlert, QueueArrival } from '../src/first-number-link';
 import { createMondayItem, MondayItemInput, MONDAY_BOARD_ID, MONDAY_COLUMNS } from '../src/monday';
 import { updateSlackMessage } from '../src/slack';
-import { EntrySettings, validateEntry } from '../src/twilio-entry';
+import { EntrySettings, publicNumbersFor, validateEntry } from '../src/twilio-entry';
 import { getSupabaseClient } from '../src/supabase';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -186,6 +188,7 @@ function twilioStore(): FirstNumberStore {
 }
 
 interface WorkerOptions {
+  route?: EntryRoute;
   zoom?: ZoomCredentials;
   skipCompleted?: boolean;
   recoverAlert?: (leg: BridgeLeg) => Promise<void>;
@@ -198,15 +201,16 @@ export async function runFirstNumber(args: string[], suppliedStore?: FirstNumber
       start > Date.now() || Date.now() - start > 6 * dayMs) throw Error('Supply a recent UTC date and optional --apply');
   const settings: EntrySettings = JSON.parse(required('ENTRY_SETTINGS'));
   validateEntry(settings);
-  if (!settings.firstPublicNumber) throw Error('Requires a single private queue bridge');
+  const route = options.route ?? 'queue111';
+  if (!publicNumbersFor(settings, route).length) throw Error('Requires an enabled public voice route');
   const channel = required('SLACK_CHANNEL_ID');
-  const queueExt = required('FIRST_QUEUE_EXTENSION');
+  const queueExt = required(route === 'queue111' ? 'FIRST_QUEUE_EXTENSION' : 'MENU_EXTENSION');
   const store = suppliedStore ?? twilioStore();
   const { claim } = store;
   const boardToken = required('MONDAY_API_TOKEN');
   const slackToken = required('SLACK_BOT_TOKEN');
   const dates = [day(start - dayMs), target, day(start + dayMs)].filter(date => date <= day(Date.now()));
-  const legs = await store.bridgeLegs(settings.destinations.queue111!, dates);
+  const legs = await store.bridgeLegs(settings.destinations[route]!, dates);
   const eligible = legs.filter(leg => leg.dialed && leg.completed && /^CA[0-9a-f]{32}$/i.test(leg.parentSid) &&
     leg.initiated >= start && leg.initiated < start + dayMs && leg.initiated < Date.now() - 7000);
   const candidates: typeof eligible = [];
@@ -218,7 +222,7 @@ export async function runFirstNumber(args: string[], suppliedStore?: FirstNumber
   const token = await zoomToken(options.zoom);
   const history = await readZoomHistory(token, dates[0], dates[dates.length - 1]);
   async function reserve(parentSid: string, zoomId: string, slackChannel: string, ts: string, observedItem: string | undefined,
-    caller: string, started: number, ended: number, status: 'ANSWERED' | 'ENDED') {
+    caller: string, started: number, ended: number, status: 'ANSWERED' | 'ENDED', queue: QueueIdentity) {
     const data = { parentSid, zoomId, channel: slackChannel, ts };
     await claim('link-parent-' + parentSid, data);
     await claim('link-zoom-' + zoomId, data);
@@ -226,8 +230,8 @@ export async function runFirstNumber(args: string[], suppliedStore?: FirstNumber
     // Give Joel's existing processor its normal record. It uses these very fields
     // for subsequent status replies and the recording/analytics workflow.
     const inserted = await db.from('rb_calls').upsert({ call_id: zoomId, status,
-      caller_phone_e164: caller, route_kind: 'MAIN', forwarded_by_extension_number: queueExt,
-      forwarded_by_name: '111', slack_parent_ts: ts, created_at_ms: started,
+      caller_phone_e164: caller, route_kind: queue.kind, forwarded_by_extension_number: queue.extension,
+      forwarded_by_name: queue.name, slack_parent_ts: ts, created_at_ms: started,
       updated_at_ms: Date.now(), last_event_ts_ms: ended, last_event_rank: 50 },
       { onConflict: 'call_id', ignoreDuplicates: true });
     if (inserted.error) throw Error('Could not reserve Zoom call in the existing workflow');
@@ -274,6 +278,22 @@ export async function runFirstNumber(args: string[], suppliedStore?: FirstNumber
       await claim('edit-' + parentSid, { parentSid, zoomId, itemId, channel, ts });
     },
     forwardedTo: (call: QueueArrival, bridge: string) => forwardedTo(token, call, bridge),
+    menuQueue: async (arrival: QueueArrival) => {
+      const id = arrival.call_history_uuid || arrival.id;
+      if (!id) throw Error('Menu history is unavailable');
+      const detail = await getJson<{call_id: string; call_elements?: ZoomElement[]; call_path?: ZoomElement[]}>(
+        new URL('https://api.zoom.us/v2/phone/call_history/' + encodeURIComponent(id)),
+        { headers: { authorization: 'Bearer ' + token } });
+      const elements = detail.call_elements ?? detail.call_path;
+      if (detail.call_id !== arrival.call_id || !elements?.length) throw Error('Incomplete menu path');
+      const first = firstQueueNode(arrival.call_id, elements);
+      if (!first?.callee_ext_number) return undefined;
+      const config = await getSupabaseClient().from('rb_call_queues').select('name,route_kind')
+        .eq('queue_ext', first.callee_ext_number).maybeSingle();
+      if (config.error) throw Error('Could not read menu queue name');
+      return { extension: first.callee_ext_number, name: config.data?.name || first.callee_name || first.callee_ext_number,
+        kind: config.data?.route_kind || 'OTHER' };
+    },
     reserve, createOnce, bindItem, edit: (ch: string, ts: string, text: string) => updateSlackMessage(slackToken, ch, ts, text) };
   const totals: Record<string, number> = {};
   for (const leg of candidates) {

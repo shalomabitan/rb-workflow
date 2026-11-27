@@ -1,5 +1,5 @@
-import { incomingMessage } from './incoming-alerts';
-import { EntrySettings, validateEntry } from './twilio-entry';
+import { EntryRoute, incomingMessage } from './incoming-alerts';
+import { EntrySettings, publicNumbersFor, validateEntry } from './twilio-entry';
 import { MondayItemInput } from './monday';
 
 export interface BridgeLeg {
@@ -51,10 +51,10 @@ function couldBeSameCall(leg: BridgeLeg, row: QueueArrival): boolean {
 }
 
 export function matchQueueArrival(leg: BridgeLeg, allLegs: BridgeLeg[], history: QueueArrival[],
-  landing: string, queueExt: string): string | undefined {
+  landing: string, queueExt: string, entryType = 'call_queue'): string | undefined {
   if (!sid.test(leg.parentSid) || !sid.test(leg.childSid) || !phone.test(leg.caller) ||
       leg.landing !== landing || !phone.test(landing)) return;
-  const arrivals = history.filter(row => row.direction === 'inbound' && row.callee_ext_type === 'call_queue' &&
+  const arrivals = history.filter(row => row.direction === 'inbound' && row.callee_ext_type === entryType &&
     row.callee_ext_number === queueExt && couldBeSameCall(leg, row));
   const ids = new Set(arrivals.map(row => row.call_id));
   if (ids.size !== 1 || !/^\d+$/.test(arrivals[0]?.call_id || '')) return;
@@ -72,7 +72,9 @@ export interface OriginalMessage {
   metadata?: { event_type?: string; event_payload?: { parent_call_sid?: string } };
 }
 
+export interface QueueIdentity { name: string; kind: string; extension?: string }
 interface LinkServices {
+  menuQueue?(call: QueueArrival): Promise<QueueIdentity | undefined>;
   itemForZoomCall(id: string): Promise<string | undefined>;
   workflowOwner(id: string): Promise<{ slack_parent_ts?: string | null; monday_item_id?: string | null } | null>;
   originalMessage(channel: string, ts: string): Promise<OriginalMessage | undefined>;
@@ -81,7 +83,7 @@ interface LinkServices {
   recordEdit(parentSid: string, zoomId: string, item: string, channel: string, ts: string): Promise<void>;
   forwardedTo(call: QueueArrival, bridge: string): Promise<boolean>;
   reserve(parentSid: string, zoomId: string, channel: string, ts: string, observedItem: string | undefined,
-    caller: string, started: number, ended: number, status: 'ANSWERED' | 'ENDED'): Promise<void>;
+    caller: string, started: number, ended: number, status: 'ANSWERED' | 'ENDED', queue: QueueIdentity): Promise<void>;
   createOnce(parentSid: string, input: MondayItemInput): Promise<string | undefined>;
   bindItem(parentSid: string, zoomId: string, item: string): Promise<void>;
   edit(channel: string, ts: string, text: string): Promise<{ ok: boolean; ts?: string }>;
@@ -91,31 +93,35 @@ export async function linkFirstNumber(leg: BridgeLeg, allLegs: BridgeLeg[], hist
   alert: PostedAlert, settings: EntrySettings, channel: string, queueExt: string,
   services: LinkServices, apply: boolean) {
   validateEntry(settings);
-  if (!settings.firstPublicNumber || !queueExt || alert.route !== 'queue111' ||
+  const route = alert.route as EntryRoute;
+  const publicNumbers = publicNumbersFor(settings, route);
+  if (!publicNumbers.length || !queueExt || !alert.entry || settings.ingress[alert.entry] !== route ||
       alert.state !== 'posted' || alert.channel !== channel || !/^\d+\.\d+$/.test(alert.ts || '') ||
-      alert.entry !== Object.keys(settings.ingress)[0] || alert.childSid !== leg.childSid ||
+      alert.childSid !== leg.childSid ||
       alert.caller !== leg.caller || alert.landing !== leg.landing ||
       !Number.isFinite(alert.initiated) || Math.abs(alert.initiated! - leg.initiated) > 2000) return 'unverified-alert';
-  const zoomId = matchQueueArrival(leg, allLegs, history, settings.destinations.queue111!, queueExt);
+  const entryType = route === 'receptionist' ? 'auto_receptionist' : 'call_queue';
+  const zoomId = matchQueueArrival(leg, allLegs, history, settings.destinations[route]!, queueExt, entryType);
   if (!zoomId) return 'unresolved-call';
   const arrival = history.find(row => row.call_id === zoomId && row.direction === 'inbound' &&
-    row.callee_ext_type === 'call_queue' && row.callee_ext_number === queueExt && couldBeSameCall(leg, row))!;
+    row.callee_ext_type === entryType && row.callee_ext_number === queueExt && couldBeSameCall(leg, row))!;
   const ended = Date.parse(arrival.end_time || '');
   if (!Number.isFinite(ended) || ended < Date.parse(arrival.start_time!)) return 'awaiting-history';
   // The Zoom-hosted public number is a separate PSTN leg. Someone dialing the
   // private Twilio number directly must never be recorded as an 855 caller.
   const possibleOrigin = (other: BridgeLeg, row: QueueArrival) => {
     const elapsed = other.initiated - Date.parse(row.start_time || '');
-    return row.direction === 'inbound' && row.callee_did_number === settings.firstPublicNumber &&
+    return row.direction === 'inbound' && publicNumbers.includes(row.callee_did_number || '') &&
       row.caller_did_number === other.caller && elapsed >= -1000 && elapsed <= 15000;
   };
   const origins = history.filter(row => possibleOrigin(leg, row));
   const origin = origins[0];
-  if (!origin?.call_id || origin.call_id === zoomId || new Set(origins.map(row => row.call_id)).size !== 1 ||
+  if (!origin?.call_id || !origin.callee_did_number || origin.call_id === zoomId ||
+      new Set(origins.map(row => row.call_id + '/' + row.callee_did_number)).size !== 1 ||
       allLegs.some(other => other.childSid !== leg.childSid && origins.some(row => possibleOrigin(other, row))) ||
       !await services.forwardedTo(origin, alert.entry)) return 'unverified-origin';
   const ts = alert.ts!;
-  const call = { route: 'queue111' as const, callerNumber: leg.caller, callerName: alert.callerName };
+  const call = { route, callerNumber: leg.caller, callerName: alert.callerName };
   const expected = incomingMessage(call);
   let originalText: string;
   if (alert.receipt) {
@@ -129,28 +135,33 @@ export async function linkFirstNumber(leg: BridgeLeg, allLegs: BridgeLeg[], hist
         original.metadata.event_payload?.parent_call_sid !== leg.parentSid) return 'unverified-message';
     originalText = original.text;
   }
+  if (route === 'receptionist' && !services.menuQueue) throw Error('Missing menu history reader');
+  const firstQueue = route === 'queue111' ? { name: '111', kind: 'MAIN', extension: queueExt } : await services.menuQueue!(arrival);
+  const finalCall = { ...call, firstQueue };
+  const ownership = firstQueue ?? { name: 'Main Auto Receptionist', kind: 'OTHER', extension: queueExt };
   let item = await services.itemForZoomCall(zoomId);
   if (item && !/^\d+$/.test(item)) throw Error('Invalid Monday item ID');
   const owner = await services.workflowOwner(zoomId);
   if ((owner?.slack_parent_ts && owner.slack_parent_ts !== ts) ||
       (owner?.monday_item_id && String(owner.monday_item_id) !== item)) return 'workflow-conflict';
-  const alreadyLinked = !!item && (originalText === incomingMessage({ ...call, mondayItemId: item }) ||
+  const alreadyLinked = !!item && (originalText === incomingMessage({ ...finalCall, mondayItemId: item }) ||
     (!!alert.receipt && await services.editRecorded(leg.parentSid, zoomId, item, channel, ts)));
   if (!alreadyLinked && originalText !== expected) return 'message-changed';
   if (!apply) return alreadyLinked ? 'already-linked' : item ? 'ready' : 'would-create-item';
   const status = arrival.call_result === 'answered' ? 'ANSWERED' : 'ENDED';
-  await services.reserve(leg.parentSid, zoomId, channel, ts, item, leg.caller, leg.initiated, ended, status);
+  await services.reserve(leg.parentSid, zoomId, channel, ts, item, leg.caller, leg.initiated, ended, status, ownership);
   if (!item) {
     item = await services.createOnce(leg.parentSid, { zoomCallId: zoomId, callerPhone: leg.caller,
       callerName: alert.callerName, incomingDateIso: new Date(origin.start_time!).toISOString(),
-      callStatus: status, callQueue: 'MAIN',
-      source: '111', numberCalled: settings.firstPublicNumber });
+      callStatus: status, callQueue: firstQueue?.kind === 'MAIN' ? 'MAIN' : firstQueue?.kind === 'OVERFLOW' ? 'OVERFLOW' :
+        firstQueue?.kind === 'ANSWERING_SERVICE' ? 'ANSWERING_SERVICE' : undefined,
+      source: ownership.name, numberCalled: origin.callee_did_number });
     if (!item) return 'awaiting-item';
     if (!/^\d+$/.test(item)) throw Error('Invalid created Monday item ID');
   }
   await services.bindItem(leg.parentSid, zoomId, item);
   if (alreadyLinked) return 'already-linked';
-  const linked = incomingMessage({ ...call, mondayItemId: item });
+  const linked = incomingMessage({ ...finalCall, mondayItemId: item });
   const result = await services.edit(channel, ts, linked);
   if (!result.ok || result.ts !== ts) throw Error('Original Slack alert edit was not confirmed');
   await services.recordEdit(leg.parentSid, zoomId, item, channel, ts);

@@ -1,5 +1,5 @@
 import { incomingMessage, EntryRoute } from './incoming-alerts';
-import { EntrySettings, validateEntry } from './twilio-entry';
+import { EntrySettings, publicNumbersFor, validateEntry } from './twilio-entry';
 import { postSlackMessage } from './slack';
 import type { SlackReceipt } from './first-number-link';
 
@@ -72,7 +72,8 @@ export async function deliverProgress(context: Context, event: ProgressEvent, po
   const key = 'incoming-' + event.ParentCallSid;
   const document = documents(key);
   const claim: Delivery = { state: 'posting', route: event.route, channel: context.SLACK_CHANNEL_ID };
-  if (settings.firstPublicNumber) {
+  const tracked = publicNumbersFor(settings, event.route).length > 0;
+  if (tracked) {
     Object.assign(claim, { entry: parent.to, childSid: event.CallSid, caller: parent.from,
       callerName: parent.callerName || undefined, landing: event.To, initiated: Date.parse(event.Timestamp) });
   }
@@ -99,7 +100,7 @@ export async function deliverProgress(context: Context, event: ProgressEvent, po
     throw new Error('Slack rejected incoming alert: ' + result.error);
   }
   if (!result.ok || !result.ts) throw new Error('Slack delivery uncertain: ' + key);
-  if (settings.firstPublicNumber) {
+  if (tracked) {
     if (result.channel !== claim.channel) throw Error('Slack delivery channel not confirmed: ' + key);
     claim.receipt = { parentSid: event.ParentCallSid, channel: result.channel, ts: result.ts, text };
   }
