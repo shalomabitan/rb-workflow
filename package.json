@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "link:first-number": "ts-node scripts/link-first-number.ts",
     "dev": "serverless offline start",
     "deploy": "serverless deploy",
     "deploy:prod": "git diff --quiet HEAD || { echo 'Refusing to deploy prod: commit your changes first.'; exit 1; }; serverless deploy --stage prod",
@@ -17,8 +18,10 @@
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.700.0",
+    "@aws-sdk/client-ssm": "^3.1179.0",
     "@supabase/supabase-js": "^2.91.1",
-    "libphonenumber-js": "^1.11.0"
+    "libphonenumber-js": "^1.11.0",
+    "twilio": "^6.3.1"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.145",

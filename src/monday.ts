@@ -175,6 +175,7 @@ export async function createMondayItem(
     headers: {
       'Content-Type': 'application/json',
       Authorization: apiToken,
+      'Idempotency-Key': 'incoming-' + MONDAY_BOARD_ID + '-' + input.zoomCallId,
     },
     body: JSON.stringify({
       query,

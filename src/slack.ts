@@ -5,6 +5,7 @@
 export interface SlackPostResult {
   ok: boolean;
   ts?: string; // Thread timestamp for replies
+  channel?: string;
   error?: string;
 }
 
@@ -13,13 +14,23 @@ export interface SlackMessagePayload {
   text: string;
   thread_ts?: string; // For thread replies
   unfurl_links?: boolean;
+  metadata?: { event_type: string; event_payload: Record<string, string> };
 }
 
 export async function postSlackMessage(
   botToken: string,
   payload: SlackMessagePayload
 ): Promise<SlackPostResult> {
-  const response = await fetch('https://slack.com/api/chat.postMessage', {
+  return sendSlackMessage('chat.postMessage', botToken, payload);
+}
+
+export async function updateSlackMessage(botToken: string, channel: string, ts: string, text: string): Promise<SlackPostResult> {
+  return sendSlackMessage('chat.update', botToken, { channel, ts, text });
+}
+
+async function sendSlackMessage(method: 'chat.postMessage' | 'chat.update', botToken: string,
+  payload: SlackMessagePayload & { ts?: string }): Promise<SlackPostResult> {
+  const response = await fetch('https://slack.com/api/' + method, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -32,10 +43,11 @@ export async function postSlackMessage(
     throw new Error(`Slack API error: ${response.status} ${response.statusText}`);
   }
 
-  const result = (await response.json()) as { ok: boolean; ts?: string; error?: string };
+  const result = (await response.json()) as SlackPostResult;
   return {
     ok: result.ok,
     ts: result.ts,
+    channel: result.channel,
     error: result.error,
   };
 }
@@ -52,7 +64,7 @@ export function formatNewCallMessage(
   mondayItemUrl?: string
 ): string {
   const caller = callerName ? `${callerName} (${callerPhone})` : callerPhone;
-  const emoji = routeKind === 'MAIN' ? ':phone:' : routeKind === 'OVERFLOW' ? ':warning:' : ':telephone_receiver:';
+  const emoji = (routeKind === 'MAIN' || routeKind === 'MAIN MENU') ? ':phone:' : routeKind === 'OVERFLOW' ? ':warning:' : ':telephone_receiver:';
   let message = `${emoji} *Incoming Call*\n` +
     `> *From:* ${caller}\n` +
     `> *Queue:* ${queueName} (${routeKind})`;
